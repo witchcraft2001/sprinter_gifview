@@ -12,5 +12,6 @@ Options:
   -fast    Ignore GIF frame delays for decoder/render profiling.
 
 Current build status:
-  Command line parsing and project build/package/image scaffolding are present.
-  GIF parser, memory cache loader, LZW decoder and renderer are under development.
+  Command line parsing, packaging, test image generation, DSS file open,
+  size validation, page allocation and 16 KB page loading are present.
+  GIF parser, LZW decoder and renderer are under development.

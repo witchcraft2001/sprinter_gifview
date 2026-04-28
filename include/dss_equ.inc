@@ -12,6 +12,7 @@ Dss.BootDsk     EQU     09h    ; return system (boot) drive
 ; Files
 Dss.Create      EQU     0Ah    ; create/overwrite file by name
 Dss.Create_N    EQU     0Bh    ; create new file only if absent
+Dss.Erase       EQU     0Dh    ; historical DSS delete/erase alias
 Dss.Delete      EQU     0Eh    ; delete file or empty dir
 Dss.Rename      EQU     10h    ; rename file/directory
 Dss.Open        EQU     11h    ; open existing file
@@ -19,10 +20,14 @@ Dss.Close       EQU     12h    ; close handle
 Dss.Read        EQU     13h    ; read bytes from handle
 Dss.Write       EQU     14h    ; write bytes to handle
 Dss.Move_FP     EQU     15h    ; move file pointer (seek)
+Dss.MoveFp.FromStart   EQU 00h ; Move_FP subfunction: seek from start
+Dss.MoveFp.FromCurrent EQU 01h ; Move_FP subfunction: seek from current
+Dss.MoveFp.FromEnd     EQU 02h ; Move_FP subfunction: seek from end
 Dss.Attrib      EQU     16h    ; change/read file attributes
 Dss.Get_D_T     EQU     17h    ; read time/date stamp
 Dss.Put_D_T     EQU     18h    ; write time/date stamp
 Dss.F_First     EQU     19h    ; start directory search
+Dss.Find.DosName EQU    01h    ; F_First subfunction: DOS 8.3 name
 Dss.F_Next      EQU     1Ah    ; continue directory search
 Dss.MkDir       EQU     1Bh    ; create directory
 Dss.RmDir       EQU     1Ch    ; remove directory
@@ -59,6 +64,7 @@ Dss.Wait        EQU     42h    ; wait for child termination
 Dss.GSwitch     EQU     43h    ; parse command line switch
 Dss.DosName     EQU     44h    ; convert to/from 8.3 name
 Dss.Ex_Path     EQU     45h    ; read command line buffer
+Dss.ExPath.GSwitch EQU  07h    ; Ex_Path subfunction used by legacy tools
 Dss.Environ     EQU     46h    ; access environment variables
 Dss.AppInfo     EQU     47h    ; get parent/app descriptor
 
