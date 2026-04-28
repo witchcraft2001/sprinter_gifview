@@ -1,0 +1,7 @@
+.DS_Store
+/specs.md
+/references/*
+/build/
+/distr/*.zip
+/distr/*.img
+plan.md
