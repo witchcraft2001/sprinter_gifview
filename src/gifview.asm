@@ -22,6 +22,10 @@ MAX_FRAME_INDEX EQU #0100
 FRAME_ENTRY_SIZE EQU 20
 CANVAS_MEMORY_PAGES EQU #05
 LZW_WORKSPACE_PAGES EQU #04
+VIDEO_MODE_320_256 EQU #81
+VIDEO_SCREEN_PAGES EQU #05
+VIDEO_PAGE_A EQU VPAGE_TILES
+VIDEO_PAGE_B EQU VPAGE_TILES + VIDEO_SCREEN_PAGES
 
         ORG     GIFVIEW_ORG - DSS_EXE_HEADER_SIZE
         DSS_EXE_HEADER 1, #0000, GIFVIEW_ORG, GIFVIEW_ORG, GIFVIEW_STACK
@@ -46,6 +50,7 @@ Main:
         CALL    AllocateWorkingMemory
         LD      HL,MsgNotImplemented
         CALL    PrintString
+        CALL    InitPlaybackVideo
 ExitSuccess:
         CALL    CleanupResources
         LD      BC,#0100 * #00 + Dss.Exit
@@ -1221,6 +1226,76 @@ ClearLoadWindow:
         LDIR
         RET
 
+InitPlaybackVideo:
+        IN      A,(RGMOD)
+        LD      (SavedRGMOD),A
+        LD      C,Dss.GetVMod
+        RST     Dss.Rst
+        LD      (SavedVideoMode),A
+        LD      A,B
+        LD      (SavedVideoBank),A
+        LD      BC,#0100 * #00 + Dss.SetVMod
+        LD      A,VIDEO_MODE_320_256
+        RST     Dss.Rst
+        JR      NC,.mode_ok
+        LD      HL,MsgVideoModeError
+        CALL    PrintString
+        JP      ExitWithError
+.mode_ok:
+        LD      A,#01
+        LD      (VideoInitializedFlag),A
+        CALL    LoadPreparedGlobalPalette
+        CALL    ClearVideoBuffers
+        RET
+
+RestorePlaybackVideo:
+        LD      A,(VideoInitializedFlag)
+        OR      A
+        RET     Z
+        XOR     A
+        LD      (VideoInitializedFlag),A
+        LD      A,(SavedVideoBank)
+        LD      B,A
+        LD      A,(SavedVideoMode)
+        LD      C,Dss.SetVMod
+        RST     Dss.Rst
+        LD      A,(SavedRGMOD)
+        OUT     (RGMOD),A
+        RET
+
+ClearVideoBuffers:
+        IN      A,(PAGE3)
+        LD      (SavedPage3),A
+        LD      A,VIDEO_PAGE_A
+        LD      C,VIDEO_SCREEN_PAGES
+        CALL    ClearVideoPageRange
+        LD      A,VIDEO_PAGE_B
+        LD      C,VIDEO_SCREEN_PAGES
+        CALL    ClearVideoPageRange
+        XOR     A
+        OUT     (RGMOD),A
+        CALL    RestorePage3
+        RET
+
+ClearVideoPageRange:
+        LD      (ClearVideoPageValue),A
+        LD      A,C
+        LD      (ClearVideoPageCount),A
+.loop:
+        LD      A,(ClearVideoPageCount)
+        OR      A
+        RET     Z
+        LD      A,(ClearVideoPageValue)
+        OUT     (PAGE3),A
+        CALL    ClearLoadWindow
+        LD      A,(ClearVideoPageValue)
+        INC     A
+        LD      (ClearVideoPageValue),A
+        LD      A,(ClearVideoPageCount)
+        DEC     A
+        LD      (ClearVideoPageCount),A
+        JR      .loop
+
 PrintSelectedOptions:
         LD      A,(OptionFlags)
         AND     FLAG_CENTER
@@ -1255,6 +1330,7 @@ CleanupResources:
         LD      A,#FF
         LD      (SavedPage3),A
 .page_restored:
+        CALL    RestorePlaybackVideo
         CALL    CloseInputFile
         CALL    FreeLzwWorkspaceMemory
         CALL    FreeCanvasMemory
@@ -1331,6 +1407,18 @@ LzwMemoryAllocatedFlag:
 ClearBlockId:
         DB      #00
 ClearPageIndex:
+        DB      #00
+VideoInitializedFlag:
+        DB      #00
+SavedVideoMode:
+        DB      #00
+SavedVideoBank:
+        DB      #00
+SavedRGMOD:
+        DB      #00
+ClearVideoPageValue:
+        DB      #00
+ClearVideoPageCount:
         DB      #00
 SavedPage3:
         DB      #FF
@@ -1505,6 +1593,8 @@ MsgNoMemory:
         DB      "Error: not enough memory.",#0D,#0A,#00
 MsgMemoryMapError:
         DB      "Error: cannot map memory page.",#0D,#0A,#00
+MsgVideoModeError:
+        DB      "Error: cannot initialize video mode.",#0D,#0A,#00
 MsgNotGif:
         DB      "Error: not a GIF file.",#0D,#0A,#00
 MsgUnsupportedSize:

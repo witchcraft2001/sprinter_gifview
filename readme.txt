@@ -20,5 +20,7 @@ Current build status:
   GIF block metadata scanning are present. A frame index for up to 256 frames is
   prepared for the decoder. The global GIF palette is converted from RGB8 to
   Sprinter RGB6 format. Canvas and LZW workspace memory blocks are allocated for
-  playback mode, cleared before use, and released on exit. The -i option exits
-  after metadata output. LZW decoder and renderer are under development.
+  playback mode, cleared before use, and released on exit. Playback mode also
+  initializes 320x256x256 video, loads the prepared palette, clears screen
+  buffers, and restores the previous mode on exit. The -i option exits after
+  metadata output. LZW decoder and renderer are under development.
