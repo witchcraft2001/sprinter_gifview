@@ -20,6 +20,8 @@ GIF_MAX_WIDTH EQU #0140
 GIF_MAX_HEIGHT EQU #0100
 MAX_FRAME_INDEX EQU #0100
 FRAME_ENTRY_SIZE EQU 20
+CANVAS_MEMORY_PAGES EQU #05
+LZW_WORKSPACE_PAGES EQU #04
 
         ORG     GIFVIEW_ORG - DSS_EXE_HEADER_SIZE
         DSS_EXE_HEADER 1, #0000, GIFVIEW_ORG, GIFVIEW_ORG, GIFVIEW_STACK
@@ -41,6 +43,7 @@ Main:
         LD      A,(OptionFlags)
         AND     FLAG_INFO
         JR      NZ,ExitSuccess
+        CALL    AllocateWorkingMemory
         LD      HL,MsgNotImplemented
         CALL    PrintString
 ExitSuccess:
@@ -1055,6 +1058,39 @@ PrintFileInfo:
         CALL    PrintCrLf
         RET
 
+AllocateWorkingMemory:
+        CALL    AllocateCanvasMemory
+        CALL    AllocateLzwWorkspaceMemory
+        RET
+
+AllocateCanvasMemory:
+        LD      B,CANVAS_MEMORY_PAGES
+        LD      C,Dss.GetMem
+        RST     Dss.Rst
+        JR      NC,.ok
+        LD      HL,MsgNoMemory
+        CALL    PrintString
+        JP      ExitWithError
+.ok:
+        LD      (CanvasMemoryBlockId),A
+        LD      A,#01
+        LD      (CanvasMemoryAllocatedFlag),A
+        RET
+
+AllocateLzwWorkspaceMemory:
+        LD      B,LZW_WORKSPACE_PAGES
+        LD      C,Dss.GetMem
+        RST     Dss.Rst
+        JR      NC,.ok
+        LD      HL,MsgNoMemory
+        CALL    PrintString
+        JP      ExitWithError
+.ok:
+        LD      (LzwMemoryBlockId),A
+        LD      A,#01
+        LD      (LzwMemoryAllocatedFlag),A
+        RET
+
 PrintSelectedOptions:
         LD      A,(OptionFlags)
         AND     FLAG_CENTER
@@ -1090,12 +1126,36 @@ CleanupResources:
         LD      (SavedPage3),A
 .page_restored:
         CALL    CloseInputFile
+        CALL    FreeLzwWorkspaceMemory
+        CALL    FreeCanvasMemory
         LD      A,(MemoryAllocatedFlag)
         OR      A
         RET     Z
         XOR     A
         LD      (MemoryAllocatedFlag),A
         LD      A,(MemoryBlockId)
+        LD      C,Dss.FreeMem
+        RST     Dss.Rst
+        RET
+
+FreeCanvasMemory:
+        LD      A,(CanvasMemoryAllocatedFlag)
+        OR      A
+        RET     Z
+        XOR     A
+        LD      (CanvasMemoryAllocatedFlag),A
+        LD      A,(CanvasMemoryBlockId)
+        LD      C,Dss.FreeMem
+        RST     Dss.Rst
+        RET
+
+FreeLzwWorkspaceMemory:
+        LD      A,(LzwMemoryAllocatedFlag)
+        OR      A
+        RET     Z
+        XOR     A
+        LD      (LzwMemoryAllocatedFlag),A
+        LD      A,(LzwMemoryBlockId)
         LD      C,Dss.FreeMem
         RST     Dss.Rst
         RET
@@ -1129,6 +1189,14 @@ FileOpenFlag:
 MemoryBlockId:
         DB      #00
 MemoryAllocatedFlag:
+        DB      #00
+CanvasMemoryBlockId:
+        DB      #00
+CanvasMemoryAllocatedFlag:
+        DB      #00
+LzwMemoryBlockId:
+        DB      #00
+LzwMemoryAllocatedFlag:
         DB      #00
 SavedPage3:
         DB      #FF
