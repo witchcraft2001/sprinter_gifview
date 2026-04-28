@@ -2,6 +2,9 @@ GIFVIEW.EXE
 
 Animated GIF viewer for Sprinter DSS.
 
+Author:
+  Dmitry Mikhalchenkov, Sprinter Team
+
 Usage:
   GIFVIEW.EXE <filename.gif> [-center] [-i] [-once] [-fast]
 
@@ -13,5 +16,6 @@ Options:
 
 Current build status:
   Command line parsing, packaging, test image generation, DSS file open,
-  size validation, page allocation and 16 KB page loading are present.
-  GIF parser, LZW decoder and renderer are under development.
+  size validation, page allocation, 16 KB page loading, GIF header parsing and
+  GIF block metadata scanning are present. The -i option exits after metadata
+  output. LZW decoder and renderer are under development.

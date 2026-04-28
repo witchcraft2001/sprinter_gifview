@@ -16,6 +16,8 @@ CACHE_RUNTIME_BASE EQU #0100
 MAX_GIF_SIZE_HIGH EQU #0018
 PAGE_SIZE EQU #4000
 LOAD_WINDOW EQU #C000
+GIF_MAX_WIDTH EQU #0140
+GIF_MAX_HEIGHT EQU #0100
 
         ORG     GIFVIEW_ORG - DSS_EXE_HEADER_SIZE
         DSS_EXE_HEADER 1, #0000, GIFVIEW_ORG, GIFVIEW_ORG, GIFVIEW_STACK
@@ -34,8 +36,12 @@ Main:
         CALL    CopyCacheCode
         CALL    LoadGifFile
         CALL    PrintSelectedOptions
+        LD      A,(OptionFlags)
+        AND     FLAG_INFO
+        JR      NZ,ExitSuccess
         LD      HL,MsgNotImplemented
         CALL    PrintString
+ExitSuccess:
         CALL    CleanupResources
         LD      BC,#0100 * #00 + Dss.Exit
         RST     Dss.Rst
@@ -80,8 +86,10 @@ PrintHexByte:
         JP      PrintHexNibble
 
 PrintHexWord:
+        PUSH    HL
         LD      A,H
         CALL    PrintHexByte
+        POP     HL
         LD      A,L
         JP      PrintHexByte
 
@@ -275,6 +283,10 @@ LoadGifFile:
         CALL    CalculatePagesNeeded
         CALL    AllocateGifMemory
         CALL    LoadFilePages
+        LD      HL,MsgParsing
+        CALL    PrintString
+        CALL    ParseGifHeader
+        CALL    PrintFileInfo
         RET
 
 ReadFileSize:
@@ -413,10 +425,396 @@ LoadFilePages:
 .done:
         LD      A,(SavedPage3)
         OUT     (PAGE3),A
+        LD      A,#FF
+        LD      (SavedPage3),A
         CALL    PrintCrLf
         CALL    CloseInputFile
-        CALL    PrintFileInfo
         RET
+
+MapGifPage0:
+        IN      A,(PAGE3)
+        LD      (SavedPage3),A
+        XOR     A
+        LD      B,A
+        LD      A,(MemoryBlockId)
+        LD      C,Dss.SetWin3
+        RST     Dss.Rst
+        JR      NC,.ok
+        LD      HL,MsgMemoryMapError
+        CALL    PrintString
+        JP      ExitWithError
+.ok:
+        RET
+
+RestorePage3:
+        LD      A,(SavedPage3)
+        CP      #FF
+        RET     Z
+        OUT     (PAGE3),A
+        LD      A,#FF
+        LD      (SavedPage3),A
+        RET
+
+ParseGifHeader:
+        CALL    MapGifPage0
+        LD      A,(LOAD_WINDOW + 0)
+        CP      "G"
+        JP      NZ,InvalidGifFile
+        LD      A,(LOAD_WINDOW + 1)
+        CP      "I"
+        JP      NZ,InvalidGifFile
+        LD      A,(LOAD_WINDOW + 2)
+        CP      "F"
+        JP      NZ,InvalidGifFile
+        LD      A,(LOAD_WINDOW + 3)
+        CP      "8"
+        JP      NZ,InvalidGifFile
+        LD      A,(LOAD_WINDOW + 4)
+        CP      "7"
+        JR      Z,.version_second_ok
+        CP      "9"
+        JP      NZ,InvalidGifFile
+.version_second_ok:
+        LD      A,(LOAD_WINDOW + 5)
+        CP      "a"
+        JP      NZ,InvalidGifFile
+        LD      HL,LOAD_WINDOW
+        LD      DE,GifVersion
+        LD      BC,6
+        LDIR
+        XOR     A
+        LD      (DE),A
+        LD      A,(LOAD_WINDOW + 6)
+        LD      L,A
+        LD      A,(LOAD_WINDOW + 7)
+        LD      H,A
+        LD      (GifWidth),HL
+        LD      A,(LOAD_WINDOW + 8)
+        LD      L,A
+        LD      A,(LOAD_WINDOW + 9)
+        LD      H,A
+        LD      (GifHeight),HL
+        LD      A,(LOAD_WINDOW + 10)
+        LD      (GifPacked),A
+        CALL    CalculateGlobalColorTableSize
+        CALL    RestorePage3
+        CALL    ValidateGifDimensions
+        CALL    ScanGifMetadata
+        RET
+
+InvalidGifFile:
+        LD      HL,MsgNotGif
+        CALL    PrintString
+        JP      ExitWithError
+
+CalculateGlobalColorTableSize:
+        LD      A,(GifPacked)
+        BIT     7,A
+        JR      NZ,.present
+        LD      HL,#0000
+        LD      (GifGctEntries),HL
+        LD      (GifGctBytes),HL
+        XOR     A
+        LD      (GifGctFlag),A
+        RET
+.present:
+        LD      A,#01
+        LD      (GifGctFlag),A
+        LD      A,(GifPacked)
+        AND     #07
+        LD      B,A
+        LD      HL,#0002
+.loop:
+        LD      A,B
+        OR      A
+        JR      Z,.done
+        ADD     HL,HL
+        DJNZ    .loop
+.done:
+        LD      (GifGctEntries),HL
+        LD      D,H
+        LD      E,L
+        ADD     HL,HL
+        ADD     HL,DE
+        LD      (GifGctBytes),HL
+        RET
+
+ValidateGifDimensions:
+        LD      HL,(GifWidth)
+        LD      DE,GIF_MAX_WIDTH
+        OR      A
+        SBC     HL,DE
+        JR      Z,.width_ok
+        JR      C,.width_ok
+        JR      GifSizeUnsupported
+.width_ok:
+        LD      HL,(GifHeight)
+        LD      DE,GIF_MAX_HEIGHT
+        OR      A
+        SBC     HL,DE
+        JR      Z,GifDimensionsOk
+        JR      C,GifDimensionsOk
+GifSizeUnsupported:
+        LD      HL,MsgUnsupportedSize
+        CALL    PrintString
+        JP      ExitWithError
+GifDimensionsOk:
+        RET
+
+ScanGifMetadata:
+        CALL    MapGifPage0
+        CALL    ResetGifMetadata
+        LD      HL,LOAD_WINDOW + 13
+        LD      DE,(GifGctBytes)
+        ADD     HL,DE
+        LD      (StreamPtr),HL
+        XOR     A
+        LD      (StreamPage),A
+.loop:
+        CALL    StreamGetByte
+        CP      #3B
+        JR      Z,.done
+        CP      #2C
+        JR      Z,.image
+        CP      #21
+        JR      Z,.extension
+        OR      A
+        JR      Z,.loop
+        JP      InvalidGifBlock
+.image:
+        CALL    ParseImageBlock
+        JR      .loop
+.extension:
+        CALL    ParseExtensionBlock
+        JR      .loop
+.done:
+        CALL    RestorePage3
+        RET
+
+ResetGifMetadata:
+        XOR     A
+        LD      (GifFrameCount),A
+        LD      (GifFrameCount + 1),A
+        LD      (GifInterlaceFlag),A
+        LD      (GifLocalColorTableFlag),A
+        LD      (GifTransparencyFlag),A
+        LD      (GifDisposal2Flag),A
+        LD      (GifDisposal3Flag),A
+        LD      (GifLoopFlag),A
+        LD      (GifLoopCount),A
+        LD      (GifLoopCount + 1),A
+        RET
+
+StreamGetByte:
+        PUSH    HL
+        PUSH    BC
+        PUSH    DE
+        LD      HL,(StreamPtr)
+        LD      A,(HL)
+        LD      (StreamByte),A
+        INC     HL
+        LD      A,H
+        OR      A
+        JR      NZ,.store_ptr
+        LD      HL,LOAD_WINDOW
+        LD      (StreamPtr),HL
+        CALL    StreamMapNextPage
+        JR      .done
+.store_ptr:
+        LD      (StreamPtr),HL
+.done:
+        POP     DE
+        POP     BC
+        POP     HL
+        LD      A,(StreamByte)
+        RET
+
+StreamMapNextPage:
+        LD      A,(StreamPage)
+        INC     A
+        LD      (StreamPage),A
+        LD      C,A
+        LD      A,(PagesNeeded)
+        CP      C
+        JP      C,InvalidGifBlock
+        JP      Z,InvalidGifBlock
+        LD      B,C
+        LD      A,(MemoryBlockId)
+        LD      C,Dss.SetWin3
+        RST     Dss.Rst
+        RET     NC
+        LD      HL,MsgMemoryMapError
+        CALL    PrintString
+        JP      ExitWithError
+
+StreamSkipBC:
+        LD      A,B
+        OR      C
+        RET     Z
+.loop:
+        CALL    StreamGetByte
+        DEC     BC
+        LD      A,B
+        OR      C
+        JR      NZ,.loop
+        RET
+
+SkipSubBlocks:
+        CALL    StreamGetByte
+        OR      A
+        RET     Z
+        LD      B,#00
+        LD      C,A
+        CALL    StreamSkipBC
+        JR      SkipSubBlocks
+
+ParseImageBlock:
+        LD      HL,(GifFrameCount)
+        INC     HL
+        LD      (GifFrameCount),HL
+        LD      BC,8
+        CALL    StreamSkipBC
+        CALL    StreamGetByte
+        LD      (ImagePackedByte),A
+        BIT     6,A
+        JR      Z,.no_interlace
+        LD      A,#01
+        LD      (GifInterlaceFlag),A
+.no_interlace:
+        LD      A,(ImagePackedByte)
+        BIT     7,A
+        JR      Z,.skip_image_data
+        LD      A,#01
+        LD      (GifLocalColorTableFlag),A
+        LD      A,(ImagePackedByte)
+        CALL    CalcColorTableBytesFromPacked
+        LD      B,H
+        LD      C,L
+        CALL    StreamSkipBC
+.skip_image_data:
+        CALL    StreamGetByte
+        CALL    SkipSubBlocks
+        RET
+
+CalcColorTableBytesFromPacked:
+        AND     #07
+        LD      B,A
+        LD      HL,#0002
+.loop:
+        LD      A,B
+        OR      A
+        JR      Z,.entries_ready
+        ADD     HL,HL
+        DJNZ    .loop
+.entries_ready:
+        LD      D,H
+        LD      E,L
+        ADD     HL,HL
+        ADD     HL,DE
+        RET
+
+ParseExtensionBlock:
+        CALL    StreamGetByte
+        CP      #F9
+        JR      Z,ParseGraphicControlExtension
+        CP      #FF
+        JR      Z,ParseApplicationExtension
+        CALL    SkipSubBlocks
+        RET
+
+ParseGraphicControlExtension:
+        CALL    StreamGetByte
+        CP      #04
+        JR      NZ,.skip_unexpected
+        CALL    StreamGetByte
+        LD      (GcePackedByte),A
+        BIT     0,A
+        JR      Z,.no_transparency
+        LD      A,#01
+        LD      (GifTransparencyFlag),A
+.no_transparency:
+        LD      A,(GcePackedByte)
+        AND     #1C
+        CP      #08
+        JR      NZ,.not_disposal2
+        LD      A,#01
+        LD      (GifDisposal2Flag),A
+.not_disposal2:
+        LD      A,(GcePackedByte)
+        AND     #1C
+        CP      #0C
+        JR      NZ,.not_disposal3
+        LD      A,#01
+        LD      (GifDisposal3Flag),A
+.not_disposal3:
+        LD      BC,3
+        CALL    StreamSkipBC
+        CALL    StreamGetByte
+        RET
+.skip_unexpected:
+        LD      B,#00
+        LD      C,A
+        CALL    StreamSkipBC
+        CALL    SkipSubBlocks
+        RET
+
+ParseApplicationExtension:
+        CALL    StreamGetByte
+        CP      #0B
+        JR      NZ,.skip_unexpected
+        LD      HL,AppIdBuffer
+        LD      B,#0B
+.read_id:
+        CALL    StreamGetByte
+        LD      (HL),A
+        INC     HL
+        DJNZ    .read_id
+        CALL    IsNetscapeAppId
+        JP      NZ,SkipSubBlocks
+        CALL    StreamGetByte
+        CP      #03
+        JR      NZ,.skip_after_size
+        CALL    StreamGetByte
+        CALL    StreamGetByte
+        LD      L,A
+        CALL    StreamGetByte
+        LD      H,A
+        LD      (GifLoopCount),HL
+        LD      A,#01
+        LD      (GifLoopFlag),A
+        CALL    StreamGetByte
+        RET
+.skip_after_size:
+        LD      B,#00
+        LD      C,A
+        CALL    StreamSkipBC
+        CALL    SkipSubBlocks
+        RET
+.skip_unexpected:
+        LD      B,#00
+        LD      C,A
+        CALL    StreamSkipBC
+        CALL    SkipSubBlocks
+        RET
+
+IsNetscapeAppId:
+        LD      HL,AppIdBuffer
+        LD      DE,AppIdNetscape
+        LD      B,#0B
+.loop:
+        LD      A,(DE)
+        CP      (HL)
+        RET     NZ
+        INC     HL
+        INC     DE
+        DJNZ    .loop
+        XOR     A
+        RET
+
+InvalidGifBlock:
+        LD      HL,MsgInvalidGifBlock
+        CALL    PrintString
+        JP      ExitWithError
 
 PrintFileInfo:
         LD      HL,MsgSelectedFile
@@ -432,6 +830,81 @@ PrintFileInfo:
         CALL    PrintString
         LD      A,(PagesNeeded)
         CALL    PrintHexByte
+        CALL    PrintCrLf
+        LD      HL,MsgGifVersion
+        CALL    PrintString
+        LD      HL,GifVersion
+        CALL    PrintString
+        CALL    PrintCrLf
+        LD      HL,MsgGifWidth
+        CALL    PrintString
+        LD      HL,(GifWidth)
+        CALL    PrintHexWord
+        CALL    PrintCrLf
+        LD      HL,MsgGifHeight
+        CALL    PrintString
+        LD      HL,(GifHeight)
+        CALL    PrintHexWord
+        CALL    PrintCrLf
+        LD      HL,MsgGifPacked
+        CALL    PrintString
+        LD      A,(GifPacked)
+        CALL    PrintHexByte
+        CALL    PrintCrLf
+        LD      HL,MsgGifGctPresent
+        CALL    PrintString
+        LD      A,(GifGctFlag)
+        CALL    PrintHexByte
+        CALL    PrintCrLf
+        LD      HL,MsgGifGctEntries
+        CALL    PrintString
+        LD      HL,(GifGctEntries)
+        CALL    PrintHexWord
+        CALL    PrintCrLf
+        LD      HL,MsgGifGctBytes
+        CALL    PrintString
+        LD      HL,(GifGctBytes)
+        CALL    PrintHexWord
+        CALL    PrintCrLf
+        LD      HL,MsgGifFrames
+        CALL    PrintString
+        LD      HL,(GifFrameCount)
+        CALL    PrintHexWord
+        CALL    PrintCrLf
+        LD      HL,MsgGifInterlace
+        CALL    PrintString
+        LD      A,(GifInterlaceFlag)
+        CALL    PrintHexByte
+        CALL    PrintCrLf
+        LD      HL,MsgGifLocalColorTable
+        CALL    PrintString
+        LD      A,(GifLocalColorTableFlag)
+        CALL    PrintHexByte
+        CALL    PrintCrLf
+        LD      HL,MsgGifTransparency
+        CALL    PrintString
+        LD      A,(GifTransparencyFlag)
+        CALL    PrintHexByte
+        CALL    PrintCrLf
+        LD      HL,MsgGifDisposal2
+        CALL    PrintString
+        LD      A,(GifDisposal2Flag)
+        CALL    PrintHexByte
+        CALL    PrintCrLf
+        LD      HL,MsgGifDisposal3
+        CALL    PrintString
+        LD      A,(GifDisposal3Flag)
+        CALL    PrintHexByte
+        CALL    PrintCrLf
+        LD      HL,MsgGifLoop
+        CALL    PrintString
+        LD      A,(GifLoopFlag)
+        CALL    PrintHexByte
+        CALL    PrintCrLf
+        LD      HL,MsgGifLoopCount
+        CALL    PrintString
+        LD      HL,(GifLoopCount)
+        CALL    PrintHexWord
         CALL    PrintCrLf
         RET
 
@@ -520,6 +993,50 @@ FileSizeHigh:
         DW      #0000
 FileSizeLow:
         DW      #0000
+GifWidth:
+        DW      #0000
+GifHeight:
+        DW      #0000
+GifGctEntries:
+        DW      #0000
+GifGctBytes:
+        DW      #0000
+GifPacked:
+        DB      #00
+GifGctFlag:
+        DB      #00
+StreamPtr:
+        DW      #0000
+StreamPage:
+        DB      #00
+StreamByte:
+        DB      #00
+GifFrameCount:
+        DW      #0000
+GifInterlaceFlag:
+        DB      #00
+GifLocalColorTableFlag:
+        DB      #00
+GifTransparencyFlag:
+        DB      #00
+GifDisposal2Flag:
+        DB      #00
+GifDisposal3Flag:
+        DB      #00
+GifLoopFlag:
+        DB      #00
+GifLoopCount:
+        DW      #0000
+ImagePackedByte:
+        DB      #00
+GcePackedByte:
+        DB      #00
+AppIdBuffer:
+        DS      11,#00
+AppIdNetscape:
+        DB      "NETSCAPE2.0"
+GifVersion:
+        DS      7,#00
 CharBuffer:
         DB      #00,#00
 InputFileName:
@@ -532,11 +1049,43 @@ MsgUsage:
 MsgSelectedFile:
         DB      "File: ",#00
 MsgFileSize:
-        DB      "Size: $",#00
+        DB      "Size: #",#00
 MsgPages:
-        DB      "Pages: $",#00
+        DB      "Pages: #",#00
+MsgGifVersion:
+        DB      "GIF version: ",#00
+MsgGifWidth:
+        DB      "Width: #",#00
+MsgGifHeight:
+        DB      "Height: #",#00
+MsgGifPacked:
+        DB      "Packed: #",#00
+MsgGifGctPresent:
+        DB      "Global color table: #",#00
+MsgGifGctEntries:
+        DB      "Global color table entries: #",#00
+MsgGifGctBytes:
+        DB      "Global color table bytes: #",#00
+MsgGifFrames:
+        DB      "Frames: #",#00
+MsgGifInterlace:
+        DB      "Interlace: #",#00
+MsgGifLocalColorTable:
+        DB      "Local color table: #",#00
+MsgGifTransparency:
+        DB      "Transparency: #",#00
+MsgGifDisposal2:
+        DB      "Disposal restore background: #",#00
+MsgGifDisposal3:
+        DB      "Disposal restore previous: #",#00
+MsgGifLoop:
+        DB      "Loop extension: #",#00
+MsgGifLoopCount:
+        DB      "Loop count: #",#00
 MsgLoading:
         DB      "Loading",#00
+MsgParsing:
+        DB      "OK. Parsing...",#0D,#0A,#00
 MsgOptCenter:
         DB      "Option: center",#0D,#0A,#00
 MsgOptInfo:
@@ -565,5 +1114,11 @@ MsgNoMemory:
         DB      "Error: not enough memory.",#0D,#0A,#00
 MsgMemoryMapError:
         DB      "Error: cannot map memory page.",#0D,#0A,#00
+MsgNotGif:
+        DB      "Error: not a GIF file.",#0D,#0A,#00
+MsgUnsupportedSize:
+        DB      "Error: unsupported GIF canvas size.",#0D,#0A,#00
+MsgInvalidGifBlock:
+        DB      "Error: invalid GIF block stream.",#0D,#0A,#00
 MsgCrLf:
         DB      #0D,#0A,#00
