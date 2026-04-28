@@ -18,6 +18,8 @@ PAGE_SIZE EQU #4000
 LOAD_WINDOW EQU #C000
 GIF_MAX_WIDTH EQU #0140
 GIF_MAX_HEIGHT EQU #0100
+MAX_FRAME_INDEX EQU #0100
+FRAME_ENTRY_SIZE EQU 20
 
         ORG     GIFVIEW_ORG - DSS_EXE_HEADER_SIZE
         DSS_EXE_HEADER 1, #0000, GIFVIEW_ORG, GIFVIEW_ORG, GIFVIEW_STACK
@@ -603,6 +605,10 @@ ResetGifMetadata:
         LD      (GifLoopFlag),A
         LD      (GifLoopCount),A
         LD      (GifLoopCount + 1),A
+        LD      (FrameIndexCount),A
+        LD      (FrameIndexCount + 1),A
+        LD      (FrameIndexOverflow),A
+        CALL    ResetCurrentGce
         RET
 
 StreamGetByte:
@@ -672,10 +678,29 @@ ParseImageBlock:
         LD      HL,(GifFrameCount)
         INC     HL
         LD      (GifFrameCount),HL
-        LD      BC,8
-        CALL    StreamSkipBC
+        CALL    ReadStreamWord
+        LD      (ImageLeft),HL
+        CALL    ReadStreamWord
+        LD      (ImageTop),HL
+        CALL    ReadStreamWord
+        LD      (ImageWidth),HL
+        CALL    ReadStreamWord
+        LD      (ImageHeight),HL
         CALL    StreamGetByte
         LD      (ImagePackedByte),A
+        XOR     A
+        LD      (FrameColorTablePage),A
+        LD      HL,#0000
+        LD      (FrameColorTablePtr),HL
+        LD      A,(GifGctFlag)
+        OR      A
+        JR      Z,.color_table_selected
+        XOR     A
+        LD      (FrameColorTablePage),A
+        LD      HL,LOAD_WINDOW + 13
+        LD      (FrameColorTablePtr),HL
+.color_table_selected:
+        LD      A,(ImagePackedByte)
         BIT     6,A
         JR      Z,.no_interlace
         LD      A,#01
@@ -686,6 +711,10 @@ ParseImageBlock:
         JR      Z,.skip_image_data
         LD      A,#01
         LD      (GifLocalColorTableFlag),A
+        LD      A,(StreamPage)
+        LD      (FrameColorTablePage),A
+        LD      HL,(StreamPtr)
+        LD      (FrameColorTablePtr),HL
         LD      A,(ImagePackedByte)
         CALL    CalcColorTableBytesFromPacked
         LD      B,H
@@ -693,7 +722,110 @@ ParseImageBlock:
         CALL    StreamSkipBC
 .skip_image_data:
         CALL    StreamGetByte
+        LD      (FrameLzwMinCodeSize),A
+        LD      A,(StreamPage)
+        LD      (FrameDataPage),A
+        LD      HL,(StreamPtr)
+        LD      (FrameDataPtr),HL
+        CALL    IndexCurrentFrame
         CALL    SkipSubBlocks
+        CALL    ResetCurrentGce
+        RET
+
+ReadStreamWord:
+        CALL    StreamGetByte
+        LD      L,A
+        CALL    StreamGetByte
+        LD      H,A
+        RET
+
+ResetCurrentGce:
+        XOR     A
+        LD      (CurrentGcePacked),A
+        LD      (CurrentDelay),A
+        LD      (CurrentDelay + 1),A
+        LD      (CurrentTransparentIndex),A
+        RET
+
+GetFrameEntryPtr:
+        LD      A,(FrameIndexCount)
+        LD      L,A
+        LD      H,#00
+        ADD     HL,HL
+        ADD     HL,HL
+        LD      D,H
+        LD      E,L
+        ADD     HL,HL
+        ADD     HL,HL
+        ADD     HL,DE
+        LD      DE,FrameIndexTable
+        ADD     HL,DE
+        RET
+
+IndexCurrentFrame:
+        LD      A,(FrameIndexCount + 1)
+        OR      A
+        JR      Z,.has_room
+        LD      A,#01
+        LD      (FrameIndexOverflow),A
+        RET
+.has_room:
+        CALL    GetFrameEntryPtr
+        LD      A,(FrameDataPage)
+        LD      (HL),A
+        INC     HL
+        LD      DE,(FrameDataPtr)
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        INC     HL
+        LD      A,(FrameColorTablePage)
+        LD      (HL),A
+        INC     HL
+        LD      DE,(FrameColorTablePtr)
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        INC     HL
+        LD      DE,(ImageLeft)
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        INC     HL
+        LD      DE,(ImageTop)
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        INC     HL
+        LD      DE,(ImageWidth)
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        INC     HL
+        LD      DE,(ImageHeight)
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        INC     HL
+        LD      A,(ImagePackedByte)
+        LD      (HL),A
+        INC     HL
+        LD      A,(FrameLzwMinCodeSize)
+        LD      (HL),A
+        INC     HL
+        LD      A,(CurrentGcePacked)
+        LD      (HL),A
+        INC     HL
+        LD      A,(CurrentTransparentIndex)
+        LD      (HL),A
+        INC     HL
+        LD      DE,(CurrentDelay)
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        LD      HL,(FrameIndexCount)
+        INC     HL
+        LD      (FrameIndexCount),HL
         RET
 
 CalcColorTableBytesFromPacked:
@@ -728,6 +860,7 @@ ParseGraphicControlExtension:
         JR      NZ,.skip_unexpected
         CALL    StreamGetByte
         LD      (GcePackedByte),A
+        LD      (CurrentGcePacked),A
         BIT     0,A
         JR      Z,.no_transparency
         LD      A,#01
@@ -747,8 +880,12 @@ ParseGraphicControlExtension:
         LD      A,#01
         LD      (GifDisposal3Flag),A
 .not_disposal3:
-        LD      BC,3
-        CALL    StreamSkipBC
+        CALL    StreamGetByte
+        LD      (CurrentDelay),A
+        CALL    StreamGetByte
+        LD      (CurrentDelay + 1),A
+        CALL    StreamGetByte
+        LD      (CurrentTransparentIndex),A
         CALL    StreamGetByte
         RET
 .skip_unexpected:
@@ -870,6 +1007,16 @@ PrintFileInfo:
         CALL    PrintString
         LD      HL,(GifFrameCount)
         CALL    PrintHexWord
+        CALL    PrintCrLf
+        LD      HL,MsgGifFrameIndex
+        CALL    PrintString
+        LD      HL,(FrameIndexCount)
+        CALL    PrintHexWord
+        CALL    PrintCrLf
+        LD      HL,MsgGifFrameIndexOverflow
+        CALL    PrintString
+        LD      A,(FrameIndexOverflow)
+        CALL    PrintHexByte
         CALL    PrintCrLf
         LD      HL,MsgGifInterlace
         CALL    PrintString
@@ -1029,7 +1176,35 @@ GifLoopCount:
         DW      #0000
 ImagePackedByte:
         DB      #00
+ImageLeft:
+        DW      #0000
+ImageTop:
+        DW      #0000
+ImageWidth:
+        DW      #0000
+ImageHeight:
+        DW      #0000
 GcePackedByte:
+        DB      #00
+CurrentGcePacked:
+        DB      #00
+CurrentDelay:
+        DW      #0000
+CurrentTransparentIndex:
+        DB      #00
+FrameDataPage:
+        DB      #00
+FrameDataPtr:
+        DW      #0000
+FrameColorTablePage:
+        DB      #00
+FrameColorTablePtr:
+        DW      #0000
+FrameLzwMinCodeSize:
+        DB      #00
+FrameIndexCount:
+        DW      #0000
+FrameIndexOverflow:
         DB      #00
 AppIdBuffer:
         DS      11,#00
@@ -1037,6 +1212,8 @@ AppIdNetscape:
         DB      "NETSCAPE2.0"
 GifVersion:
         DS      7,#00
+FrameIndexTable:
+        DS      FRAME_ENTRY_SIZE * MAX_FRAME_INDEX,#00
 CharBuffer:
         DB      #00,#00
 InputFileName:
@@ -1068,6 +1245,10 @@ MsgGifGctBytes:
         DB      "Global color table bytes: #",#00
 MsgGifFrames:
         DB      "Frames: #",#00
+MsgGifFrameIndex:
+        DB      "Frame index entries: #",#00
+MsgGifFrameIndexOverflow:
+        DB      "Frame index overflow: #",#00
 MsgGifInterlace:
         DB      "Interlace: #",#00
 MsgGifLocalColorTable:

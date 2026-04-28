@@ -17,5 +17,6 @@ Options:
 Current build status:
   Command line parsing, packaging, test image generation, DSS file open,
   size validation, page allocation, 16 KB page loading, GIF header parsing and
-  GIF block metadata scanning are present. The -i option exits after metadata
-  output. LZW decoder and renderer are under development.
+  GIF block metadata scanning are present. A frame index for up to 256 frames is
+  prepared for the decoder. The -i option exits after metadata output. LZW
+  decoder and renderer are under development.
