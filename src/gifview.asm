@@ -107,13 +107,31 @@ PrintHexFileSize:
 ParseCommandLine:
 CommandLinePointerSlot EQU ParseCommandLine + 1
         LD      HL,#0000
+        XOR     A
+        LD      (InputFileNameFlag),A
+        LD      (InputFileName),A
         CALL    SkipProgramName
+.loop:
         CALL    SkipSpaces
         LD      A,(HL)
         OR      A
-        JP      Z,ShowUsage
+        JR      Z,.done
+        CP      "-"
+        JR      Z,.option
+        LD      A,(InputFileNameFlag)
+        OR      A
+        JP      NZ,DuplicateInputFile
         CALL    CopyFileName
-        CALL    ParseOptions
+        LD      A,#01
+        LD      (InputFileNameFlag),A
+        JR      .loop
+.option:
+        CALL    ParseOption
+        JR      .loop
+.done:
+        LD      A,(InputFileNameFlag)
+        OR      A
+        JP      Z,ShowUsage
         RET
 
 SkipProgramName:
@@ -150,11 +168,8 @@ CopyFileName:
         LD      (DE),A
         RET
 
-ParseOptions:
-        CALL    SkipSpaces
+ParseOption:
         LD      A,(HL)
-        OR      A
-        RET     Z
         CP      "-"
         JP      NZ,UnknownOption
         INC     HL
@@ -181,7 +196,7 @@ ParseCenterOption:
         LD      A,(OptionFlags)
         OR      FLAG_CENTER
         LD      (OptionFlags),A
-        JP      ParseOptions
+        RET
 
 ParseInfoOption:
         INC     HL
@@ -189,7 +204,7 @@ ParseInfoOption:
         LD      A,(OptionFlags)
         OR      FLAG_INFO
         LD      (OptionFlags),A
-        JP      ParseOptions
+        RET
 
 ParseOnceOption:
         CALL    ExpectOptionCharO
@@ -200,7 +215,7 @@ ParseOnceOption:
         LD      A,(OptionFlags)
         OR      FLAG_ONCE
         LD      (OptionFlags),A
-        JP      ParseOptions
+        RET
 
 ParseFastOption:
         CALL    ExpectOptionCharF
@@ -211,7 +226,7 @@ ParseFastOption:
         LD      A,(OptionFlags)
         OR      FLAG_FAST
         LD      (OptionFlags),A
-        JP      ParseOptions
+        RET
 
 ExpectOptionCharA:
         LD      E,"a"
@@ -258,6 +273,11 @@ UnknownOption:
         CALL    PrintString
         JP      ExitWithError
 
+DuplicateInputFile:
+        LD      HL,MsgDuplicateInputFile
+        CALL    PrintString
+        JP      ExitWithError
+
 ShowUsage:
         LD      HL,MsgUsage
         CALL    PrintString
@@ -291,6 +311,7 @@ LoadGifFile:
         LD      HL,MsgParsing
         CALL    PrintString
         CALL    ParseGifHeader
+        CALL    PrepareGlobalPalette
         CALL    PrintFileInfo
         RET
 
@@ -956,6 +977,61 @@ InvalidGifBlock:
         CALL    PrintString
         JP      ExitWithError
 
+PrepareGlobalPalette:
+        CALL    ClearGlobalPaletteBuffer
+        LD      A,(GifGctFlag)
+        OR      A
+        RET     Z
+        CALL    MapGifPage0
+        LD      HL,LOAD_WINDOW + 13
+        LD      DE,GlobalPaletteBuffer
+        LD      A,(GifGctEntries)
+        LD      B,A
+.loop:
+        LD      A,(HL)
+        INC     HL
+        CALL    ConvertRgb8ToRgb6
+        LD      (DE),A
+        INC     DE
+        LD      A,(HL)
+        INC     HL
+        CALL    ConvertRgb8ToRgb6
+        LD      (DE),A
+        INC     DE
+        LD      A,(HL)
+        INC     HL
+        CALL    ConvertRgb8ToRgb6
+        LD      (DE),A
+        INC     DE
+        DJNZ    .loop
+        CALL    RestorePage3
+        RET
+
+ClearGlobalPaletteBuffer:
+        LD      HL,GlobalPaletteBuffer
+        LD      DE,GlobalPaletteBuffer + 1
+        LD      BC,#02FF
+        XOR     A
+        LD      (HL),A
+        LDIR
+        RET
+
+ConvertRgb8ToRgb6:
+        SRL     A
+        SRL     A
+        RET
+
+LoadPreparedGlobalPalette:
+        LD      A,(GifGctFlag)
+        OR      A
+        RET     Z
+        LD      HL,GlobalPaletteBuffer
+        LD      DE,#0000
+        LD      BC,#0100 * #0FF + Bios.SetPalette
+        XOR     A
+        RST     Bios.Rst
+        RET
+
 PrintFileInfo:
         LD      HL,MsgSelectedFile
         CALL    PrintString
@@ -1004,6 +1080,11 @@ PrintFileInfo:
         LD      HL,MsgGifGctBytes
         CALL    PrintString
         LD      HL,(GifGctBytes)
+        CALL    PrintHexWord
+        CALL    PrintCrLf
+        LD      HL,MsgGifPreparedPalette
+        CALL    PrintString
+        LD      HL,(GifGctEntries)
         CALL    PrintHexWord
         CALL    PrintCrLf
         LD      HL,MsgGifFrames
@@ -1061,6 +1142,7 @@ PrintFileInfo:
 AllocateWorkingMemory:
         CALL    AllocateCanvasMemory
         CALL    AllocateLzwWorkspaceMemory
+        CALL    ClearWorkingMemory
         RET
 
 AllocateCanvasMemory:
@@ -1089,6 +1171,54 @@ AllocateLzwWorkspaceMemory:
         LD      (LzwMemoryBlockId),A
         LD      A,#01
         LD      (LzwMemoryAllocatedFlag),A
+        RET
+
+ClearWorkingMemory:
+        IN      A,(PAGE3)
+        LD      (SavedPage3),A
+        LD      A,(CanvasMemoryBlockId)
+        LD      C,CANVAS_MEMORY_PAGES
+        CALL    ClearMemoryBlock
+        LD      A,(LzwMemoryBlockId)
+        LD      C,LZW_WORKSPACE_PAGES
+        CALL    ClearMemoryBlock
+        CALL    RestorePage3
+        RET
+
+ClearMemoryBlock:
+        LD      (ClearBlockId),A
+        XOR     A
+        LD      (ClearPageIndex),A
+.loop:
+        LD      A,(ClearPageIndex)
+        CP      C
+        RET     Z
+        LD      B,A
+        LD      A,(ClearBlockId)
+        PUSH    BC
+        LD      C,Dss.SetWin3
+        RST     Dss.Rst
+        POP     BC
+        JR      NC,.mapped
+        LD      HL,MsgMemoryMapError
+        CALL    PrintString
+        JP      ExitWithError
+.mapped:
+        PUSH    BC
+        CALL    ClearLoadWindow
+        POP     BC
+        LD      A,(ClearPageIndex)
+        INC     A
+        LD      (ClearPageIndex),A
+        JR      .loop
+
+ClearLoadWindow:
+        LD      HL,LOAD_WINDOW
+        LD      DE,LOAD_WINDOW + 1
+        LD      BC,PAGE_SIZE - 1
+        XOR     A
+        LD      (HL),A
+        LDIR
         RET
 
 PrintSelectedOptions:
@@ -1198,6 +1328,10 @@ LzwMemoryBlockId:
         DB      #00
 LzwMemoryAllocatedFlag:
         DB      #00
+ClearBlockId:
+        DB      #00
+ClearPageIndex:
+        DB      #00
 SavedPage3:
         DB      #FF
 PagesNeeded:
@@ -1280,10 +1414,14 @@ AppIdNetscape:
         DB      "NETSCAPE2.0"
 GifVersion:
         DS      7,#00
+GlobalPaletteBuffer:
+        DS      #0300,#00
 FrameIndexTable:
         DS      FRAME_ENTRY_SIZE * MAX_FRAME_INDEX,#00
 CharBuffer:
         DB      #00,#00
+InputFileNameFlag:
+        DB      #00
 InputFileName:
         DS      INPUT_FILENAME_MAX,#00
 
@@ -1311,6 +1449,8 @@ MsgGifGctEntries:
         DB      "Global color table entries: #",#00
 MsgGifGctBytes:
         DB      "Global color table bytes: #",#00
+MsgGifPreparedPalette:
+        DB      "Prepared global palette entries: #",#00
 MsgGifFrames:
         DB      "Frames: #",#00
 MsgGifFrameIndex:
@@ -1347,6 +1487,8 @@ MsgNotImplemented:
         DB      "GIF parser/renderer implementation stage is next.",#0D,#0A,#00
 MsgUnknownOption:
         DB      "Error: unknown option.",#0D,#0A,#00
+MsgDuplicateInputFile:
+        DB      "Error: multiple input files.",#0D,#0A,#00
 MsgFileNameTooLong:
         DB      "Error: file name is too long.",#0D,#0A,#00
 MsgOpenError:
