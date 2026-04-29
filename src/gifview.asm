@@ -16,6 +16,8 @@ CACHE_RUNTIME_BASE EQU #0100
 MAX_GIF_SIZE_HIGH EQU #0018
 PAGE_SIZE EQU #4000
 LOAD_WINDOW EQU #C000
+WORK_WINDOW EQU #4000
+CANVAS_WINDOW EQU LOAD_WINDOW
 GIF_MAX_WIDTH EQU #0140
 GIF_MAX_HEIGHT EQU #0100
 MAX_FRAME_INDEX EQU #0100
@@ -26,6 +28,9 @@ VIDEO_MODE_320_256 EQU #81
 VIDEO_SCREEN_PAGES EQU #05
 VIDEO_PAGE_A EQU VPAGE_TILES
 VIDEO_PAGE_B EQU VPAGE_TILES + VIDEO_SCREEN_PAGES
+LZW_PREFIX_BASE EQU #4000
+LZW_SUFFIX_BASE EQU #6000
+LZW_STACK_BASE EQU #7000
 
         ORG     GIFVIEW_ORG - DSS_EXE_HEADER_SIZE
         DSS_EXE_HEADER 1, #0000, GIFVIEW_ORG, GIFVIEW_ORG, GIFVIEW_STACK
@@ -48,9 +53,20 @@ Main:
         AND     FLAG_INFO
         JR      NZ,ExitSuccess
         CALL    AllocateWorkingMemory
-        LD      HL,MsgNotImplemented
+        LD      HL,MsgDecoding
+        CALL    PrintString
+        XOR     A
+        LD      (CurrentPlaybackFrame),A
+        LD      (CurrentPlaybackFrame + 1),A
+        CALL    DecodeCurrentFrameToCanvas
+        CALL    RestorePage1
+        CALL    RestorePage2
+        CALL    RestorePage3
+        LD      HL,MsgPressAnyKey
         CALL    PrintString
         CALL    InitPlaybackVideo
+        CALL    BlitCanvasToVideo
+        CALL    WaitForAnyKey
 ExitSuccess:
         CALL    CleanupResources
         LD      BC,#0100 * #00 + Dss.Exit
@@ -402,6 +418,8 @@ AllocateGifMemory:
         JP      ExitWithError
 .ok:
         LD      (MemoryBlockId),A
+        LD      HL,GifPageTable
+        CALL    DumpMemoryPageTable
         LD      A,#01
         LD      (MemoryAllocatedFlag),A
         RET
@@ -429,15 +447,8 @@ LoadFilePages:
         LD      A,(PagesNeeded)
         CP      C
         JR      Z,.done
-        LD      B,C
-        LD      A,(MemoryBlockId)
-        LD      C,Dss.SetWin3
-        RST     Dss.Rst
-        JR      NC,.mapped
-        LD      HL,MsgMemoryMapError
-        CALL    PrintString
-        JP      ExitWithError
-.mapped:
+        LD      A,C
+        CALL    MapGifPageIndexToPage3
         LD      A,(FileHandle)
         LD      HL,LOAD_WINDOW
         LD      DE,PAGE_SIZE
@@ -458,6 +469,8 @@ LoadFilePages:
         OUT     (PAGE3),A
         LD      A,#FF
         LD      (SavedPage3),A
+        XOR     A
+        LD      (Page3Owner),A
         CALL    PrintCrLf
         CALL    CloseInputFile
         RET
@@ -466,15 +479,41 @@ MapGifPage0:
         IN      A,(PAGE3)
         LD      (SavedPage3),A
         XOR     A
-        LD      B,A
-        LD      A,(MemoryBlockId)
-        LD      C,Dss.SetWin3
-        RST     Dss.Rst
-        JR      NC,.ok
-        LD      HL,MsgMemoryMapError
-        CALL    PrintString
-        JP      ExitWithError
-.ok:
+        CALL    MapGifPageIndexToPage3
+        LD      A,#01
+        LD      (Page3Owner),A
+        XOR     A
+        LD      (Page3MappedPage),A
+        RET
+
+MapGifPageIndexToPage3:
+        LD      HL,GifPageTable
+        JR      MapPageTableIndexToPage3
+
+MapCanvasPageIndexToPage3:
+        LD      HL,CanvasPageTable
+        JR      MapPageTableIndexToPage3
+
+MapPageTableIndexToPage3:
+        PUSH    DE
+        LD      E,A
+        LD      D,#00
+        ADD     HL,DE
+        LD      A,(HL)
+        OUT     (PAGE3),A
+        POP     DE
+        OR      A
+        RET
+
+MapPageTableIndexToPage1:
+        PUSH    DE
+        LD      E,A
+        LD      D,#00
+        ADD     HL,DE
+        LD      A,(HL)
+        OUT     (PAGE1),A
+        POP     DE
+        OR      A
         RET
 
 RestorePage3:
@@ -484,6 +523,8 @@ RestorePage3:
         OUT     (PAGE3),A
         LD      A,#FF
         LD      (SavedPage3),A
+        XOR     A
+        LD      (Page3Owner),A
         RET
 
 ParseGifHeader:
@@ -673,14 +714,13 @@ StreamMapNextPage:
         CP      C
         JP      C,InvalidGifBlock
         JP      Z,InvalidGifBlock
-        LD      B,C
-        LD      A,(MemoryBlockId)
-        LD      C,Dss.SetWin3
-        RST     Dss.Rst
-        RET     NC
-        LD      HL,MsgMemoryMapError
-        CALL    PrintString
-        JP      ExitWithError
+        LD      A,C
+        CALL    MapGifPageIndexToPage3
+        LD      A,#01
+        LD      (Page3Owner),A
+        LD      A,(StreamPage)
+        LD      (Page3MappedPage),A
+        RET
 
 StreamSkipBC:
         LD      A,B
@@ -857,6 +897,656 @@ IndexCurrentFrame:
         LD      (FrameIndexCount),HL
         RET
 
+BeginFrameDataStream:
+        IN      A,(PAGE3)
+        LD      (SavedPage3),A
+        CALL    GetCurrentFrameEntryPtr
+        LD      A,(HL)
+        LD      (FrameStreamPage),A
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (FrameStreamPtr),DE
+        XOR     A
+        LD      (FrameStreamSubBlockRemaining),A
+        LD      (FrameStreamDoneFlag),A
+        CALL    FrameStreamMapCurrentPage
+        RET
+
+GetCurrentFrameEntryPtr:
+        LD      HL,(CurrentPlaybackFrame)
+        LD      DE,(FrameIndexCount)
+        OR      A
+        SBC     HL,DE
+        JP      NC,FrameIndexOutOfRange
+        LD      A,(CurrentPlaybackFrame + 1)
+        OR      A
+        JP      NZ,FrameIndexOutOfRange
+        LD      A,(CurrentPlaybackFrame)
+        LD      L,A
+        LD      H,#00
+        ADD     HL,HL
+        ADD     HL,HL
+        LD      D,H
+        LD      E,L
+        ADD     HL,HL
+        ADD     HL,HL
+        ADD     HL,DE
+        LD      DE,FrameIndexTable
+        ADD     HL,DE
+        RET
+
+FrameStreamGetByte:
+        LD      A,(FrameStreamDoneFlag)
+        OR      A
+        JR      Z,.not_done
+        SCF
+        RET
+.not_done:
+        LD      A,(FrameStreamSubBlockRemaining)
+        OR      A
+        JR      NZ,.read_data
+        CALL    FrameStreamRawGetByte
+        JR      C,.done
+        OR      A
+        JR      Z,.done
+        LD      (FrameStreamSubBlockRemaining),A
+.read_data:
+        CALL    FrameStreamRawGetByte
+        RET     C
+        LD      (FrameStreamByte),A
+        LD      HL,FrameStreamSubBlockRemaining
+        DEC     (HL)
+        LD      A,(FrameStreamByte)
+        OR      A
+        RET
+.done:
+        LD      A,#01
+        LD      (FrameStreamDoneFlag),A
+        SCF
+        RET
+
+FrameStreamRawGetByte:
+        PUSH    HL
+        CALL    FrameStreamMapCurrentPage
+        LD      HL,(FrameStreamPtr)
+        LD      A,(HL)
+        LD      (FrameStreamByte),A
+        INC     HL
+        LD      A,H
+        OR      A
+        JR      NZ,.store_ptr
+        LD      HL,LOAD_WINDOW
+        LD      (FrameStreamPtr),HL
+        CALL    FrameStreamMapNextPage
+        JR      .done
+.store_ptr:
+        LD      (FrameStreamPtr),HL
+.done:
+        POP     HL
+        LD      A,(FrameStreamByte)
+        OR      A
+        RET
+
+FrameStreamMapCurrentPage:
+        LD      A,(Page3Owner)
+        CP      #01
+        JR      NZ,.map_page
+        LD      A,(Page3MappedPage)
+        LD      B,A
+        LD      A,(FrameStreamPage)
+        CP      B
+        RET     Z
+.map_page:
+        LD      A,(FrameStreamPage)
+        CALL    MapGifPageIndexToPage3
+        LD      A,#01
+        LD      (Page3Owner),A
+        LD      A,(FrameStreamPage)
+        LD      (Page3MappedPage),A
+        RET
+
+FrameStreamMapNextPage:
+        LD      A,(FrameStreamPage)
+        INC     A
+        LD      (FrameStreamPage),A
+        LD      C,A
+        LD      A,(PagesNeeded)
+        CP      C
+        JP      C,InvalidGifBlock
+        JP      Z,InvalidGifBlock
+        JP      FrameStreamMapCurrentPage
+
+FrameIndexOutOfRange:
+        LD      HL,MsgFrameIndexOutOfRange
+        CALL    PrintString
+        JP      ExitWithError
+
+LzwInitCodeReader:
+        CALL    MapLzwWorkspace
+        CALL    BeginFrameDataStream
+        CALL    GetCurrentFrameEntryPtr
+        LD      DE,15
+        ADD     HL,DE
+        LD      A,(HL)
+        CP      #02
+        JP      C,LzwUnsupportedCodeSize
+        CP      #09
+        JP      NC,LzwUnsupportedCodeSize
+        LD      (LzwMinCodeSize),A
+        INC     A
+        LD      (LzwCodeSize),A
+        XOR     A
+        LD      (LzwCurrentByte),A
+        LD      (LzwBitsRemaining),A
+        LD      A,(LzwMinCodeSize)
+        CALL    LzwPowerOfTwo
+        LD      (LzwClearCode),HL
+        INC     HL
+        LD      (LzwEndCode),HL
+        INC     HL
+        LD      (LzwNextCode),HL
+        RET
+
+MapLzwWorkspace:
+        IN      A,(PAGE1)
+        LD      (SavedPage1),A
+        XOR     A
+        LD      HL,LzwPageTable
+        JP      MapPageTableIndexToPage1
+
+RestorePage1:
+        LD      A,(SavedPage1)
+        CP      #FF
+        RET     Z
+        OUT     (PAGE1),A
+        LD      A,#FF
+        LD      (SavedPage1),A
+        RET
+
+LzwResetDictionary:
+        LD      HL,(LzwClearCode)
+        LD      (LzwNextCode),HL
+        LD      HL,(LzwNextCode)
+        INC     HL
+        INC     HL
+        LD      (LzwNextCode),HL
+        LD      A,(LzwMinCodeSize)
+        INC     A
+        LD      (LzwCodeSize),A
+        RET
+
+LzwGetPrefixPtr:
+        ADD     HL,HL
+        LD      DE,LZW_PREFIX_BASE
+        ADD     HL,DE
+        RET
+
+LzwGetSuffixPtr:
+        LD      DE,LZW_SUFFIX_BASE
+        ADD     HL,DE
+        RET
+
+LzwGetStackPtr:
+        LD      DE,LZW_STACK_BASE
+        ADD     HL,DE
+        RET
+
+DecodeCurrentFrameToCanvas:
+        CALL    LzwInitCodeReader
+        CALL    BeginCanvasOutput
+        CALL    LzwResetDictionary
+        CALL    LzwReadFirstDataCode
+        RET     C
+        LD      (LzwOldCode),HL
+        CALL    LzwOutputCodeString
+        CALL    IsCanvasComplete
+        RET     NZ
+.loop:
+        CALL    LzwReadCode
+        RET     C
+        LD      DE,(LzwClearCode)
+        CALL    CompareHLDE
+        JR      Z,.clear_code
+        LD      DE,(LzwEndCode)
+        CALL    CompareHLDE
+        RET     Z
+        LD      (LzwInCode),HL
+        LD      DE,(LzwNextCode)
+        CALL    CompareHLDE
+        JR      C,.known_code
+        JR      Z,.next_code
+        JP      LzwInvalidStream
+.known_code:
+        CALL    LzwOutputCodeString
+        CALL    IsCanvasComplete
+        RET     NZ
+        CALL    LzwAddDictionaryEntry
+        LD      HL,(LzwInCode)
+        LD      (LzwOldCode),HL
+        JR      .loop
+.next_code:
+        LD      HL,(LzwOldCode)
+        CALL    LzwOutputCodeString
+        CALL    IsCanvasComplete
+        RET     NZ
+        LD      A,(LzwFirstChar)
+        CALL    CanvasPutPixel
+        JP      C,LzwCanvasOverflow
+        CALL    IsCanvasComplete
+        RET     NZ
+        CALL    LzwAddDictionaryEntry
+        LD      HL,(LzwInCode)
+        LD      (LzwOldCode),HL
+        JR      .loop
+.clear_code:
+        CALL    LzwResetDictionary
+        CALL    LzwReadFirstDataCode
+        RET     C
+        LD      (LzwOldCode),HL
+        CALL    LzwOutputCodeString
+        CALL    IsCanvasComplete
+        RET     NZ
+        JR      .loop
+
+IsCanvasComplete:
+        LD      A,(CanvasOutputDoneFlag)
+        OR      A
+        RET
+
+LzwReadFirstDataCode:
+        CALL    LzwReadCode
+        RET     C
+        LD      DE,(LzwClearCode)
+        CALL    CompareHLDE
+        JR      Z,LzwReadFirstDataCode
+        LD      DE,(LzwEndCode)
+        CALL    CompareHLDE
+        JR      Z,.end_code
+        LD      DE,(LzwClearCode)
+        CALL    CompareHLDE
+        JR      C,.valid_code
+        JP      LzwInvalidStream
+.valid_code:
+        OR      A
+        RET
+.end_code:
+        SCF
+        RET
+
+LzwOutputCodeString:
+        PUSH    HL
+        CALL    LzwResetStack
+        POP     HL
+        CALL    LzwExpandCodeToStack
+        LD      (LzwFirstChar),A
+        CALL    CanvasPutPixel
+        JP      C,LzwCanvasOverflow
+.pop_loop:
+        CALL    LzwPopStack
+        RET     C
+        CALL    CanvasPutPixel
+        JP      C,LzwCanvasOverflow
+        JR      .pop_loop
+
+LzwExpandCodeToStack:
+        LD      DE,(LzwClearCode)
+        CALL    CompareHLDE
+        JR      C,.literal
+        PUSH    HL
+        CALL    LzwGetSuffixPtr
+        LD      A,(HL)
+        CALL    LzwPushStack
+        POP     HL
+        CALL    LzwReadPrefix
+        JR      LzwExpandCodeToStack
+.literal:
+        LD      A,L
+        RET
+
+LzwReadPrefix:
+        CALL    LzwGetPrefixPtr
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        EX      DE,HL
+        RET
+
+LzwAddDictionaryEntry:
+        LD      HL,(LzwNextCode)
+        LD      DE,#1000
+        CALL    CompareHLDE
+        RET     NC
+        LD      HL,(LzwNextCode)
+        CALL    LzwGetPrefixPtr
+        LD      DE,(LzwOldCode)
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        LD      HL,(LzwNextCode)
+        CALL    LzwGetSuffixPtr
+        LD      A,(LzwFirstChar)
+        LD      (HL),A
+        LD      HL,(LzwNextCode)
+        INC     HL
+        LD      (LzwNextCode),HL
+        LD      A,(LzwCodeSize)
+        CP      #0C
+        RET     NC
+        CALL    LzwPowerOfTwo
+        LD      DE,(LzwNextCode)
+        EX      DE,HL
+        CALL    CompareHLDE
+        RET     NZ
+        LD      A,(LzwCodeSize)
+        INC     A
+        LD      (LzwCodeSize),A
+        RET
+
+LzwResetStack:
+        LD      HL,LZW_STACK_BASE
+        LD      (LzwStackPtr),HL
+        RET
+
+LzwPushStack:
+        LD      (LzwStackByte),A
+        LD      HL,(LzwStackPtr)
+        LD      A,H
+        CP      HIGH #8000
+        JP      NC,LzwInvalidStream
+        LD      A,(LzwStackByte)
+        LD      (HL),A
+        INC     HL
+        LD      (LzwStackPtr),HL
+        RET
+
+LzwPopStack:
+        LD      HL,(LzwStackPtr)
+        LD      DE,LZW_STACK_BASE
+        CALL    CompareHLDE
+        JR      NZ,.has_data
+        SCF
+        RET
+.has_data:
+        DEC     HL
+        LD      (LzwStackPtr),HL
+        LD      A,(HL)
+        OR      A
+        RET
+
+CompareHLDE:
+        PUSH    HL
+        OR      A
+        SBC     HL,DE
+        POP     HL
+        RET
+
+LzwInvalidStream:
+        LD      HL,MsgInvalidLzwStream
+        CALL    PrintString
+        JP      ExitWithError
+
+LzwCanvasOverflow:
+        LD      HL,MsgCanvasOverflow
+        CALL    PrintString
+        JP      ExitWithError
+
+BeginCanvasOutput:
+        XOR     A
+        LD      (CanvasOutputPage),A
+        LD      (CanvasOutputDoneFlag),A
+        LD      HL,CANVAS_WINDOW
+        LD      (CanvasOutputPtr),HL
+        CALL    GetCurrentFrameEntryPtr
+        LD      DE,6
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameLeft),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameTop),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameWidth),DE
+        LD      (CanvasFrameXRemaining),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasRowsRemaining),DE
+        INC     HL
+        INC     HL
+        INC     HL
+        LD      A,(HL)
+        AND     #01
+        LD      (CanvasTransparentFlag),A
+        INC     HL
+        LD      A,(HL)
+        LD      (CanvasTransparentIndex),A
+        CALL    CanvasSeekFrameStart
+        JP      MapCanvasOutputPage
+
+CanvasPutPixel:
+        LD      (CanvasOutputByte),A
+        LD      A,(CanvasOutputDoneFlag)
+        OR      A
+        JR      Z,.not_done
+        OR      A
+        RET
+.not_done:
+        LD      A,(CanvasTransparentFlag)
+        OR      A
+        JR      Z,.write_pixel
+        LD      A,(CanvasOutputByte)
+        LD      HL,CanvasTransparentIndex
+        CP      (HL)
+        JR      Z,.advance_pixel
+.write_pixel:
+        CALL    MapCanvasOutputPage
+        LD      HL,(CanvasOutputPtr)
+        LD      A,(CanvasOutputByte)
+        LD      (HL),A
+.advance_pixel:
+        CALL    CanvasAdvancePixel
+        RET     C
+        LD      A,(CanvasOutputByte)
+        OR      A
+        RET
+
+CanvasSeekFrameStart:
+        LD      HL,(CanvasFrameTop)
+        LD      A,H
+        OR      L
+        JR      Z,.left_offset
+.row_loop:
+        PUSH    HL
+        LD      DE,GIF_MAX_WIDTH
+        CALL    CanvasAdvanceOutputPtrByDE
+        POP     HL
+        RET     C
+        DEC     HL
+        LD      A,H
+        OR      L
+        JR      NZ,.row_loop
+.left_offset:
+        LD      DE,(CanvasFrameLeft)
+        CALL    CanvasAdvanceOutputPtrByDE
+        RET     C
+        LD      A,(CanvasOutputPage)
+        LD      (CanvasRowStartPage),A
+        LD      HL,(CanvasOutputPtr)
+        LD      (CanvasRowStartPtr),HL
+        OR      A
+        RET
+
+CanvasAdvancePixel:
+        LD      DE,#0001
+        CALL    CanvasAdvanceOutputPtrByDE
+        RET     C
+        LD      HL,(CanvasFrameXRemaining)
+        DEC     HL
+        LD      (CanvasFrameXRemaining),HL
+        LD      A,H
+        OR      L
+        RET     NZ
+        LD      HL,(CanvasRowsRemaining)
+        DEC     HL
+        LD      (CanvasRowsRemaining),HL
+        LD      A,H
+        OR      L
+        JR      NZ,.next_row
+        LD      A,#01
+        LD      (CanvasOutputDoneFlag),A
+        OR      A
+        RET
+.next_row:
+        LD      A,(CanvasRowStartPage)
+        LD      (CanvasOutputPage),A
+        LD      HL,(CanvasRowStartPtr)
+        LD      (CanvasOutputPtr),HL
+        LD      DE,GIF_MAX_WIDTH
+        CALL    CanvasAdvanceOutputPtrByDE
+        RET     C
+        LD      A,(CanvasOutputPage)
+        LD      (CanvasRowStartPage),A
+        LD      HL,(CanvasOutputPtr)
+        LD      (CanvasRowStartPtr),HL
+        LD      HL,(CanvasFrameWidth)
+        LD      (CanvasFrameXRemaining),HL
+        OR      A
+        RET
+
+CanvasAdvanceOutputPtrByDE:
+        LD      HL,(CanvasOutputPtr)
+        ADD     HL,DE
+        JR      NC,.store_ptr
+        PUSH    HL
+        LD      A,(CanvasOutputPage)
+        INC     A
+        LD      (CanvasOutputPage),A
+        CP      CANVAS_MEMORY_PAGES
+        JR      C,.next_page
+        POP     HL
+        LD      A,#01
+        LD      (CanvasOutputDoneFlag),A
+        SCF
+        RET
+.next_page:
+        POP     HL
+        LD      DE,LOAD_WINDOW
+        ADD     HL,DE
+.store_ptr:
+        LD      (CanvasOutputPtr),HL
+.ok:
+        OR      A
+        RET
+
+MapCanvasOutputPage:
+        LD      A,(Page3Owner)
+        CP      #02
+        JR      NZ,.map_page
+        LD      A,(Page3MappedPage)
+        LD      B,A
+        LD      A,(CanvasOutputPage)
+        CP      B
+        RET     Z
+.map_page:
+        LD      A,(CanvasOutputPage)
+        CALL    MapCanvasPageIndexToPage3
+        LD      A,#02
+        LD      (Page3Owner),A
+        LD      A,(CanvasOutputPage)
+        LD      (Page3MappedPage),A
+        RET
+
+RestorePage2:
+        LD      A,(SavedPage2)
+        CP      #FF
+        RET     Z
+        OUT     (PAGE2),A
+        LD      A,#FF
+        LD      (SavedPage2),A
+        RET
+
+LzwPowerOfTwo:
+        LD      B,A
+        LD      HL,#0001
+.loop:
+        LD      A,B
+        OR      A
+        RET     Z
+        ADD     HL,HL
+        DJNZ    .loop
+        RET
+
+LzwReadCode:
+        LD      HL,#0000
+        LD      DE,#0001
+        LD      A,(LzwCodeSize)
+        LD      B,A
+.loop:
+        CALL    LzwReadBit
+        JR      C,.end_of_stream
+        OR      A
+        JR      Z,.next_bit
+        ADD     HL,DE
+.next_bit:
+        SLA     E
+        RL      D
+        DJNZ    .loop
+        OR      A
+        RET
+.end_of_stream:
+        SCF
+        RET
+
+LzwReadBit:
+        PUSH    HL
+        PUSH    BC
+        PUSH    DE
+        LD      A,(LzwBitsRemaining)
+        OR      A
+        JR      NZ,.have_bits
+        CALL    FrameStreamGetByte
+        JR      C,.end_of_stream
+        LD      (LzwCurrentByte),A
+        LD      A,#08
+        LD      (LzwBitsRemaining),A
+.have_bits:
+        LD      A,(LzwCurrentByte)
+        SRL     A
+        LD      (LzwCurrentByte),A
+        LD      A,(LzwBitsRemaining)
+        DEC     A
+        LD      (LzwBitsRemaining),A
+        LD      A,#00
+        ADC     A,#00
+        LD      (LzwReadBitValue),A
+        POP     DE
+        POP     BC
+        POP     HL
+        LD      A,(LzwReadBitValue)
+        OR      A
+        RET
+.end_of_stream:
+        POP     DE
+        POP     BC
+        POP     HL
+        SCF
+        RET
+
+LzwUnsupportedCodeSize:
+        LD      HL,MsgUnsupportedLzwCodeSize
+        CALL    PrintString
+        JP      ExitWithError
+
 CalcColorTableBytesFromPacked:
         AND     #07
         LD      B,A
@@ -1012,6 +1702,9 @@ PrepareGlobalPalette:
         CALL    RestorePage3
         RET
 
+ConvertRgb8ToRgb6:
+        RET
+
 ClearGlobalPaletteBuffer:
         LD      HL,GlobalPaletteBuffer
         LD      DE,GlobalPaletteBuffer + 1
@@ -1021,21 +1714,38 @@ ClearGlobalPaletteBuffer:
         LDIR
         RET
 
-ConvertRgb8ToRgb6:
-        SRL     A
-        SRL     A
-        RET
-
 LoadPreparedGlobalPalette:
-        LD      A,(GifGctFlag)
-        OR      A
-        RET     Z
+        IN      A,(PAGE1)
+        LD      (SavedPage1),A
+        LD      A,VIDEO_PAGE_A
+        OUT     (PAGE1),A
         LD      HL,GlobalPaletteBuffer
-        LD      DE,#0000
-        LD      BC,#0100 * #0FF + Bios.SetPalette
+        LD      (PaletteLoadPtr),HL
         XOR     A
-        RST     Bios.Rst
-        RET
+        LD      (PaletteLoadIndex),A
+.loop:
+        LD      A,(PaletteLoadIndex)
+        OUT     (PORT_Y),A
+        LD      DE,#43E0
+        LD      HL,(PaletteLoadPtr)
+        LD      A,(HL)
+        INC     HL
+        LD      (DE),A
+        INC     E
+        LD      A,(HL)
+        INC     HL
+        LD      (DE),A
+        INC     E
+        LD      A,(HL)
+        INC     HL
+        LD      (DE),A
+        LD      (PaletteLoadPtr),HL
+        LD      HL,PaletteLoadIndex
+        INC     (HL)
+        JR      NZ,.loop
+        LD      A,#C0
+        OUT     (PORT_Y),A
+        JP      RestorePage1
 
 PrintFileInfo:
         LD      HL,MsgSelectedFile
@@ -1160,6 +1870,8 @@ AllocateCanvasMemory:
         JP      ExitWithError
 .ok:
         LD      (CanvasMemoryBlockId),A
+        LD      HL,CanvasPageTable
+        CALL    DumpMemoryPageTable
         LD      A,#01
         LD      (CanvasMemoryAllocatedFlag),A
         RET
@@ -1174,9 +1886,19 @@ AllocateLzwWorkspaceMemory:
         JP      ExitWithError
 .ok:
         LD      (LzwMemoryBlockId),A
+        LD      HL,LzwPageTable
+        CALL    DumpMemoryPageTable
         LD      A,#01
         LD      (LzwMemoryAllocatedFlag),A
         RET
+
+DumpMemoryPageTable:
+        LD      C,Bios.Emm_Fn5
+        RST     Bios.Rst
+        RET     NC
+        LD      HL,MsgMemoryMapError
+        CALL    PrintString
+        JP      ExitWithError
 
 ClearWorkingMemory:
         IN      A,(PAGE3)
@@ -1226,6 +1948,15 @@ ClearLoadWindow:
         LDIR
         RET
 
+ClearWorkWindow:
+        LD      HL,WORK_WINDOW
+        LD      DE,WORK_WINDOW + 1
+        LD      BC,PAGE_SIZE - 1
+        XOR     A
+        LD      (HL),A
+        LDIR
+        RET
+
 InitPlaybackVideo:
         IN      A,(RGMOD)
         LD      (SavedRGMOD),A
@@ -1244,8 +1975,8 @@ InitPlaybackVideo:
 .mode_ok:
         LD      A,#01
         LD      (VideoInitializedFlag),A
-        CALL    LoadPreparedGlobalPalette
         CALL    ClearVideoBuffers
+        CALL    LoadPreparedGlobalPalette
         RET
 
 RestorePlaybackVideo:
@@ -1264,37 +1995,111 @@ RestorePlaybackVideo:
         RET
 
 ClearVideoBuffers:
-        IN      A,(PAGE3)
-        LD      (SavedPage3),A
+        IN      A,(PAGE1)
+        LD      (SavedPage1),A
         LD      A,VIDEO_PAGE_A
-        LD      C,VIDEO_SCREEN_PAGES
-        CALL    ClearVideoPageRange
-        LD      A,VIDEO_PAGE_B
-        LD      C,VIDEO_SCREEN_PAGES
-        CALL    ClearVideoPageRange
+        OUT     (PAGE1),A
+        CALL    ClearVisibleScreenRows
         XOR     A
         OUT     (RGMOD),A
-        CALL    RestorePage3
+        LD      A,#C0
+        OUT     (PORT_Y),A
+        CALL    RestorePage1
         RET
 
-ClearVideoPageRange:
-        LD      (ClearVideoPageValue),A
-        LD      A,C
-        LD      (ClearVideoPageCount),A
+ClearVisibleScreenRows:
+        XOR     A
+        LD      (VideoRowIndex),A
 .loop:
-        LD      A,(ClearVideoPageCount)
+        LD      A,(VideoRowIndex)
+        OUT     (PORT_Y),A
+        CALL    ClearVideoRowA
+        LD      HL,VideoRowIndex
+        INC     (HL)
+        LD      A,(HL)
         OR      A
+        JR      NZ,.loop
         RET     Z
-        LD      A,(ClearVideoPageValue)
-        OUT     (PAGE3),A
-        CALL    ClearLoadWindow
-        LD      A,(ClearVideoPageValue)
+
+ClearVideoRowA:
+        LD      HL,WORK_WINDOW
+        LD      DE,WORK_WINDOW + 1
+        LD      BC,GIF_MAX_WIDTH - 1
+        XOR     A
+        LD      (HL),A
+        LDIR
+        RET
+
+BlitCanvasToVideo:
+        IN      A,(PAGE3)
+        LD      (SavedPage3),A
+        IN      A,(PAGE1)
+        LD      (SavedPage1),A
+        LD      A,VIDEO_PAGE_A
+        OUT     (PAGE1),A
+        XOR     A
+        LD      (BlitSourcePage),A
+        LD      (VideoRowIndex),A
+        LD      HL,LOAD_WINDOW
+        LD      (BlitSourcePtr),HL
+        CALL    MapBlitCanvasPage
+.row_loop:
+        LD      A,(VideoRowIndex)
+        OUT     (PORT_Y),A
+        CALL    BlitCanvasRowToVideo
+        LD      HL,VideoRowIndex
+        INC     (HL)
+        LD      A,(HL)
+        OR      A
+        JR      NZ,.row_loop
+        XOR     A
+        OUT     (RGMOD),A
+        LD      A,#C0
+        OUT     (PORT_Y),A
+        CALL    RestorePage3
+        CALL    RestorePage1
+        RET
+
+BlitCanvasRowToVideo:
+        LD      DE,WORK_WINDOW
+        LD      BC,GIF_MAX_WIDTH
+.loop:
+        LD      HL,(BlitSourcePtr)
+        LD      A,(HL)
+        LD      (DE),A
+        INC     HL
+        LD      A,H
+        OR      A
+        JR      NZ,.source_ok
+        LD      HL,LOAD_WINDOW
+        LD      (BlitSourcePtr),HL
+        PUSH    BC
+        PUSH    DE
+        CALL    AdvanceBlitCanvasPage
+        POP     DE
+        POP     BC
+        JR      .dest_next
+.source_ok:
+        LD      (BlitSourcePtr),HL
+.dest_next:
+        INC     DE
+        DEC     BC
+        LD      A,B
+        OR      C
+        JR      NZ,.loop
+        RET
+
+AdvanceBlitCanvasPage:
+        LD      A,(BlitSourcePage)
         INC     A
-        LD      (ClearVideoPageValue),A
-        LD      A,(ClearVideoPageCount)
-        DEC     A
-        LD      (ClearVideoPageCount),A
-        JR      .loop
+        LD      (BlitSourcePage),A
+        CP      CANVAS_MEMORY_PAGES
+        RET     NC
+        JP      MapBlitCanvasPage
+
+MapBlitCanvasPage:
+        LD      A,(BlitSourcePage)
+        JP      MapCanvasPageIndexToPage3
 
 PrintSelectedOptions:
         LD      A,(OptionFlags)
@@ -1323,6 +2128,8 @@ CloseInputFile:
         RET
 
 CleanupResources:
+        CALL    RestorePage1
+        CALL    RestorePage2
         LD      A,(SavedPage3)
         CP      #FF
         JR      Z,.page_restored
@@ -1382,6 +2189,11 @@ PrintFastEnabled:
         LD      HL,MsgOptFast
         JP      PrintString
 
+WaitForAnyKey:
+        LD      C,Dss.WaitKey
+        RST     Dss.Rst
+        RET
+
 GifCacheCodeStored:
         INCLUDE "cache_code.asm"
 GifCacheCodeEnd:
@@ -1420,8 +2232,30 @@ ClearVideoPageValue:
         DB      #00
 ClearVideoPageCount:
         DB      #00
+BlitPageIndex:
+        DB      #00
+BlitSourcePage:
+        DB      #00
+BlitSourcePtr:
+        DW      #0000
+VideoRowIndex:
+        DB      #00
+SavedPage1:
+        DB      #FF
+SavedPage2:
+        DB      #FF
 SavedPage3:
         DB      #FF
+Page3Owner:
+        DB      #00
+Page3MappedPage:
+        DB      #00
+GifPageTable:
+        DS      #100,#00
+CanvasPageTable:
+        DS      CANVAS_MEMORY_PAGES,#00
+LzwPageTable:
+        DS      LZW_WORKSPACE_PAGES,#00
 PagesNeeded:
         DB      #00
 PageIndex:
@@ -1496,6 +2330,74 @@ FrameIndexCount:
         DW      #0000
 FrameIndexOverflow:
         DB      #00
+CurrentPlaybackFrame:
+        DW      #0000
+FrameStreamPage:
+        DB      #00
+FrameStreamPtr:
+        DW      #0000
+FrameStreamByte:
+        DB      #00
+FrameStreamSubBlockRemaining:
+        DB      #00
+FrameStreamDoneFlag:
+        DB      #00
+LzwMinCodeSize:
+        DB      #00
+LzwCodeSize:
+        DB      #00
+LzwCurrentByte:
+        DB      #00
+LzwBitsRemaining:
+        DB      #00
+LzwReadBitValue:
+        DB      #00
+LzwClearCode:
+        DW      #0000
+LzwEndCode:
+        DW      #0000
+LzwNextCode:
+        DW      #0000
+LzwOldCode:
+        DW      #0000
+LzwInCode:
+        DW      #0000
+LzwFirstChar:
+        DB      #00
+LzwStackPtr:
+        DW      #0000
+LzwStackByte:
+        DB      #00
+CanvasOutputPage:
+        DB      #00
+CanvasOutputPtr:
+        DW      #0000
+CanvasOutputByte:
+        DB      #00
+CanvasOutputDoneFlag:
+        DB      #00
+CanvasFrameLeft:
+        DW      #0000
+CanvasFrameTop:
+        DW      #0000
+CanvasFrameWidth:
+        DW      #0000
+CanvasFrameXRemaining:
+        DW      #0000
+CanvasRowsRemaining:
+        DW      #0000
+CanvasRowStartPage:
+        DB      #00
+CanvasRowStartPtr:
+        DW      #0000
+CanvasTransparentFlag:
+        DB      #00
+CanvasTransparentIndex:
+        DB      #00
+PaletteLoadPtr:
+        DW      #0000
+PaletteLoadIndex:
+        DB      #00
 AppIdBuffer:
         DS      11,#00
 AppIdNetscape:
@@ -1563,6 +2465,10 @@ MsgLoading:
         DB      "Loading",#00
 MsgParsing:
         DB      "OK. Parsing...",#0D,#0A,#00
+MsgDecoding:
+        DB      "Decoding first frame...",#0D,#0A,#00
+MsgPressAnyKey:
+        DB      "Press any key to exit.",#0D,#0A,#00
 MsgOptCenter:
         DB      "Option: center",#0D,#0A,#00
 MsgOptInfo:
@@ -1601,5 +2507,13 @@ MsgUnsupportedSize:
         DB      "Error: unsupported GIF canvas size.",#0D,#0A,#00
 MsgInvalidGifBlock:
         DB      "Error: invalid GIF block stream.",#0D,#0A,#00
+MsgFrameIndexOutOfRange:
+        DB      "Error: frame index out of range.",#0D,#0A,#00
+MsgUnsupportedLzwCodeSize:
+        DB      "Error: unsupported GIF LZW code size.",#0D,#0A,#00
+MsgInvalidLzwStream:
+        DB      "Error: invalid GIF LZW stream.",#0D,#0A,#00
+MsgCanvasOverflow:
+        DB      "Error: decoded frame exceeds canvas buffer.",#0D,#0A,#00
 MsgCrLf:
         DB      #0D,#0A,#00
