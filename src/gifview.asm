@@ -300,10 +300,36 @@ ShowUsage:
         JP      ExitWithError
 
 CopyCacheCode:
+        CALL    EnterCacheWindow
         LD      HL,GifCacheCodeStored
         LD      DE,CACHE_RUNTIME_BASE
         LD      BC,GifCacheCodeEnd - GifCacheCodeStored
         LDIR
+        CALL    RestoreSystemWindow
+        RET
+
+EnterCacheWindow:
+        PUSH    BC
+        XOR     A
+        LD      BC,#1FFD
+        OUT     (C),A
+        LD      A,#04
+        OUT     (SYS_PORT_OFF),A
+        DI
+        IN      A,(#FB)
+        POP     BC
+        RET
+
+RestoreSystemWindow:
+        PUSH    BC
+        IN      A,(#7B)
+        LD      A,#03
+        OUT     (SYS_PORT_OFF),A
+        LD      BC,#1FFD
+        LD      A,#01
+        OUT     (C),A
+        EI
+        POP     BC
         RET
 
 LoadGifFile:
@@ -1101,7 +1127,7 @@ DecodeCurrentFrameToCanvas:
         CALL    IsCanvasComplete
         RET     NZ
 .loop:
-        CALL    LzwReadCode
+        CALL    CacheLzwReadCode
         RET     C
         LD      DE,(LzwClearCode)
         CALL    CompareHLDE
@@ -1129,7 +1155,7 @@ DecodeCurrentFrameToCanvas:
         CALL    IsCanvasComplete
         RET     NZ
         LD      A,(LzwFirstChar)
-        CALL    CanvasPutPixel
+        CALL    CacheCanvasPutPixel
         JP      C,LzwCanvasOverflow
         CALL    IsCanvasComplete
         RET     NZ
@@ -1153,7 +1179,7 @@ IsCanvasComplete:
         RET
 
 LzwReadFirstDataCode:
-        CALL    LzwReadCode
+        CALL    CacheLzwReadCode
         RET     C
         LD      DE,(LzwClearCode)
         CALL    CompareHLDE
@@ -1178,12 +1204,12 @@ LzwOutputCodeString:
         POP     HL
         CALL    LzwExpandCodeToStack
         LD      (LzwFirstChar),A
-        CALL    CanvasPutPixel
+        CALL    CacheCanvasPutPixel
         JP      C,LzwCanvasOverflow
 .pop_loop:
         CALL    LzwPopStack
         RET     C
-        CALL    CanvasPutPixel
+        CALL    CacheCanvasPutPixel
         JP      C,LzwCanvasOverflow
         JR      .pop_loop
 
@@ -1280,11 +1306,13 @@ CompareHLDE:
         RET
 
 LzwInvalidStream:
+        CALL    RestoreSystemWindow
         LD      HL,MsgInvalidLzwStream
         CALL    PrintString
         JP      ExitWithError
 
 LzwCanvasOverflow:
+        CALL    RestoreSystemWindow
         LD      HL,MsgCanvasOverflow
         CALL    PrintString
         JP      ExitWithError
@@ -2523,7 +2551,7 @@ BlitDirtyCanvasToVideo:
 .row_loop:
         LD      A,(VideoRowIndex)
         OUT     (PORT_Y),A
-        CALL    BlitDirtyCanvasRowToVideo
+        CALL    CacheBlitDirtyCanvasRowToVideo
         LD      DE,(BlitRowSkip)
         CALL    AdvanceBlitSourcePtrByDE
         LD      HL,VideoRowIndex
@@ -2615,6 +2643,7 @@ AdvanceBlitSourcePtrByDE:
         RET
 
 PlayGifFrames:
+        CALL    EnterCacheWindow
         CALL    ResetDirtyRect
 .loop:
         CALL    DecodeCurrentFrameToCanvas
@@ -2624,16 +2653,25 @@ PlayGifFrames:
         CALL    RestorePage3
         CALL    BlitDirtyCanvasToVideo
         CALL    LoadCurrentFramePalette
+        CALL    RestoreSystemWindow
         HALT
+        CALL    EnterCacheWindow
         CALL    FlipVideoBuffers
         CALL    BlitDirtyCanvasToVideo
         CALL    ResetDirtyRect
+        CALL    RestoreSystemWindow
         CALL    WaitFrameDelayOrKey
-        RET     C
+        JR      C,.done
+        CALL    EnterCacheWindow
         CALL    ApplyCurrentFrameDisposal
         CALL    AdvancePlaybackFrame
-        RET     C
+        JR      C,.done_cache
         JR      .loop
+.done_cache:
+        CALL    RestoreSystemWindow
+.done:
+        SCF
+        RET
 
 FlipVideoBuffers:
         LD      A,(VideoVisibleScreen)
@@ -2699,7 +2737,7 @@ ClearCurrentFrameRectToBackground:
         CALL    MapCanvasOutputPage
 .loop:
         LD      A,(GifBackgroundColor)
-        CALL    CanvasPutPixel
+        CALL    CacheCanvasPutPixel
         JP      C,LzwCanvasOverflow
         CALL    IsCanvasComplete
         JR      Z,.loop
