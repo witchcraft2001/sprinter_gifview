@@ -2646,7 +2646,7 @@ PlayGifFrames:
         CALL    EnterCacheWindow
         CALL    ResetDirtyRect
 .loop:
-        CALL    DecodeCurrentFrameToCanvas
+        CALL    CacheDecodeCurrentFrameToCanvas
         CALL    MarkCurrentFrameDirty
         CALL    RestorePage1
         CALL    RestorePage2

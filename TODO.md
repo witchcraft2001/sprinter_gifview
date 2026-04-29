@@ -13,8 +13,9 @@
 - Add support for GIF disposal method 3 (`restore to previous`) or document it
   as unsupported if memory cost is too high.
 - Continue moving hot decode/render routines into cache. Current cache block
-  contains `LzwReadCode`/`LzwReadBit`, per-pixel canvas output and dirty-row
-  video blit; next candidates are dictionary expand/pop loops.
+  contains the main LZW decode loop, dictionary expand/add/pop routines,
+  GIF sub-block stream byte reader, per-pixel canvas output and dirty-row video
+  blit. Next candidates are low-level page table mapping and disposal fills.
 - Replace CPU `LDIR`/byte loops in dirty-rect blits and canvas fills with
   Sprinter accelerator commands. Prefer preparing rectangular blocks so that
   `LD A,A`/vertical copy can move screen columns or strips in a tight loop;
