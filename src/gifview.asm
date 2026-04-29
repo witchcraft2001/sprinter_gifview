@@ -58,15 +58,9 @@ Main:
         XOR     A
         LD      (CurrentPlaybackFrame),A
         LD      (CurrentPlaybackFrame + 1),A
-        CALL    DecodeCurrentFrameToCanvas
-        CALL    RestorePage1
-        CALL    RestorePage2
-        CALL    RestorePage3
-        LD      HL,MsgPressAnyKey
-        CALL    PrintString
+        CALL    ClearKeyboardBuffer
         CALL    InitPlaybackVideo
-        CALL    BlitCanvasToVideo
-        CALL    WaitForAnyKey
+        CALL    PlayGifFrames
 ExitSuccess:
         CALL    CleanupResources
         LD      BC,#0100 * #00 + Dss.Exit
@@ -2101,6 +2095,97 @@ MapBlitCanvasPage:
         LD      A,(BlitSourcePage)
         JP      MapCanvasPageIndexToPage3
 
+PlayGifFrames:
+        CALL    DecodeCurrentFrameToCanvas
+        CALL    RestorePage1
+        CALL    RestorePage2
+        CALL    RestorePage3
+        CALL    BlitCanvasToVideo
+        CALL    WaitFrameDelayOrKey
+        RET     C
+        CALL    AdvancePlaybackFrame
+        RET     C
+        JR      PlayGifFrames
+
+AdvancePlaybackFrame:
+        LD      HL,(CurrentPlaybackFrame)
+        INC     HL
+        LD      DE,(FrameIndexCount)
+        PUSH    HL
+        OR      A
+        SBC     HL,DE
+        POP     HL
+        JR      NC,.wrapped
+        LD      (CurrentPlaybackFrame),HL
+        OR      A
+        RET
+.wrapped:
+        LD      A,(OptionFlags)
+        AND     FLAG_ONCE
+        JR      NZ,.finish
+        LD      HL,#0000
+        LD      (CurrentPlaybackFrame),HL
+        OR      A
+        RET
+.finish:
+        SCF
+        RET
+
+WaitFrameDelayOrKey:
+        LD      A,(OptionFlags)
+        AND     FLAG_FAST
+        JR      NZ,PollExitKey
+        CALL    GetCurrentFrameDelay
+        CALL    ConvertDelayToHalts
+.loop:
+        PUSH    HL
+        CALL    PollExitKey
+        POP     HL
+        RET     C
+        HALT
+        DEC     HL
+        LD      A,H
+        OR      L
+        JR      NZ,.loop
+        OR      A
+        RET
+
+GetCurrentFrameDelay:
+        CALL    GetCurrentFrameEntryPtr
+        LD      DE,18
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        EX      DE,HL
+        RET
+
+ConvertDelayToHalts:
+        LD      A,H
+        OR      L
+        JR      NZ,.has_delay
+        LD      HL,#0003
+        RET
+.has_delay:
+        INC     HL
+        SRL     H
+        RR      L
+        LD      A,H
+        OR      L
+        RET     NZ
+        LD      HL,#0001
+        RET
+
+PollExitKey:
+        LD      C,Dss.ScanKey
+        RST     Dss.Rst
+        JR      Z,.no_key
+        SCF
+        RET
+.no_key:
+        OR      A
+        RET
+
 PrintSelectedOptions:
         LD      A,(OptionFlags)
         AND     FLAG_CENTER
@@ -2189,8 +2274,8 @@ PrintFastEnabled:
         LD      HL,MsgOptFast
         JP      PrintString
 
-WaitForAnyKey:
-        LD      C,Dss.WaitKey
+ClearKeyboardBuffer:
+        LD      C,Dss.K_Clear
         RST     Dss.Rst
         RET
 
@@ -2466,9 +2551,7 @@ MsgLoading:
 MsgParsing:
         DB      "OK. Parsing...",#0D,#0A,#00
 MsgDecoding:
-        DB      "Decoding first frame...",#0D,#0A,#00
-MsgPressAnyKey:
-        DB      "Press any key to exit.",#0D,#0A,#00
+        DB      "Decoding frames...",#0D,#0A,#00
 MsgOptCenter:
         DB      "Option: center",#0D,#0A,#00
 MsgOptInfo:
