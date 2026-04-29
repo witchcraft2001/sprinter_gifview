@@ -25,9 +25,9 @@ FRAME_ENTRY_SIZE EQU 20
 CANVAS_MEMORY_PAGES EQU #05
 LZW_WORKSPACE_PAGES EQU #04
 VIDEO_MODE_320_256 EQU #81
-VIDEO_SCREEN_PAGES EQU #05
 VIDEO_PAGE_A EQU VPAGE_TILES
-VIDEO_PAGE_B EQU VPAGE_TILES + VIDEO_SCREEN_PAGES
+VIDEO_SCREEN_A_OFFSET EQU #0000
+VIDEO_SCREEN_B_OFFSET EQU GIF_MAX_WIDTH
 LZW_PREFIX_BASE EQU #4000
 LZW_SUFFIX_BASE EQU #6000
 LZW_STACK_BASE EQU #7000
@@ -1317,8 +1317,16 @@ BeginCanvasOutput:
         LD      E,(HL)
         INC     HL
         LD      D,(HL)
+        LD      (CanvasFrameHeight),DE
         LD      (CanvasRowsRemaining),DE
         INC     HL
+        LD      A,(HL)
+        AND     #40
+        LD      (CanvasInterlaceFlag),A
+        XOR     A
+        LD      (CanvasCurrentRow),A
+        LD      (CanvasCurrentRow + 1),A
+        LD      (CanvasInterlacePass),A
         INC     HL
         INC     HL
         LD      A,(HL)
@@ -1404,6 +1412,9 @@ CanvasAdvancePixel:
         OR      A
         RET
 .next_row:
+        LD      A,(CanvasInterlaceFlag)
+        OR      A
+        JP      NZ,CanvasAdvanceInterlacedRow
         LD      A,(CanvasRowStartPage)
         LD      (CanvasOutputPage),A
         LD      HL,(CanvasRowStartPtr)
@@ -1418,6 +1429,82 @@ CanvasAdvancePixel:
         LD      HL,(CanvasFrameWidth)
         LD      (CanvasFrameXRemaining),HL
         OR      A
+        RET
+
+CanvasAdvanceInterlacedRow:
+        CALL    CanvasNextInterlacedRow
+        LD      HL,(CanvasCurrentRow)
+        LD      DE,(CanvasFrameTop)
+        ADD     HL,DE
+        LD      (CanvasSeekTop),HL
+        XOR     A
+        LD      (CanvasOutputPage),A
+        LD      HL,CANVAS_WINDOW
+        LD      (CanvasOutputPtr),HL
+        LD      HL,(CanvasSeekTop)
+        LD      (CanvasFrameTop),HL
+        CALL    CanvasSeekFrameStart
+        LD      HL,(CanvasSeekTop)
+        LD      DE,(CanvasCurrentRow)
+        OR      A
+        SBC     HL,DE
+        LD      (CanvasFrameTop),HL
+        LD      HL,(CanvasFrameWidth)
+        LD      (CanvasFrameXRemaining),HL
+        OR      A
+        RET
+
+CanvasNextInterlacedRow:
+        LD      A,(CanvasInterlacePass)
+        CP      #01
+        JR      Z,.pass1
+        CP      #02
+        JR      Z,.pass2
+        CP      #03
+        JR      Z,.pass3
+.pass0:
+        LD      DE,#0008
+        CALL    CanvasTryInterlaceStep
+        RET     C
+        LD      A,#01
+        LD      (CanvasInterlacePass),A
+        LD      HL,#0004
+        JR      .test_row
+.pass1:
+        LD      DE,#0008
+        CALL    CanvasTryInterlaceStep
+        RET     C
+        LD      A,#02
+        LD      (CanvasInterlacePass),A
+        LD      HL,#0002
+        JR      .test_row
+.pass2:
+        LD      DE,#0004
+        CALL    CanvasTryInterlaceStep
+        RET     C
+        LD      A,#03
+        LD      (CanvasInterlacePass),A
+        LD      HL,#0001
+        JR      .test_row
+.pass3:
+        LD      DE,#0002
+        CALL    CanvasTryInterlaceStep
+        RET
+.test_row:
+        CALL    CanvasStoreInterlaceRowIfValid
+        RET     C
+        JR      CanvasNextInterlacedRow
+
+CanvasTryInterlaceStep:
+        LD      HL,(CanvasCurrentRow)
+        ADD     HL,DE
+
+CanvasStoreInterlaceRowIfValid:
+        LD      DE,(CanvasFrameHeight)
+        CALL    CompareHLDE
+        RET     NC
+        LD      (CanvasCurrentRow),HL
+        SCF
         RET
 
 CanvasAdvanceOutputPtrByDE:
@@ -1719,6 +1806,16 @@ LoadPreparedGlobalPalette:
         LD      (SavedPage1),A
         LD      A,VIDEO_PAGE_A
         OUT     (PAGE1),A
+        LD      HL,#43E0
+        CALL    LoadPreparedGlobalPaletteToBase
+        LD      HL,#43E4
+        CALL    LoadPreparedGlobalPaletteToBase
+        LD      A,#C0
+        OUT     (PORT_Y),A
+        JP      RestorePage1
+
+LoadPreparedGlobalPaletteToBase:
+        LD      (PaletteDestBase),HL
         LD      HL,GlobalPaletteBuffer
         LD      (PaletteLoadPtr),HL
         XOR     A
@@ -1726,7 +1823,7 @@ LoadPreparedGlobalPalette:
 .loop:
         LD      A,(PaletteLoadIndex)
         OUT     (PORT_Y),A
-        LD      DE,#43E0
+        LD      DE,(PaletteDestBase)
         LD      HL,(PaletteLoadPtr)
         LD      A,(HL)
         INC     HL
@@ -1743,9 +1840,7 @@ LoadPreparedGlobalPalette:
         LD      HL,PaletteLoadIndex
         INC     (HL)
         JR      NZ,.loop
-        LD      A,#C0
-        OUT     (PORT_Y),A
-        JP      RestorePage1
+        RET
 
 LoadCurrentFramePalette:
         IN      A,(PAGE3)
@@ -1780,13 +1875,14 @@ LoadCurrentFramePalette:
         LD      (PaletteEntriesRemaining),HL
         LD      A,VIDEO_PAGE_A
         OUT     (PAGE1),A
+        CALL    SetPaletteDestBaseForWriteScreen
         XOR     A
         LD      (PaletteLoadIndex),A
         CALL    MapPaletteSourcePage
 .loop:
         LD      A,(PaletteLoadIndex)
         OUT     (PORT_Y),A
-        LD      DE,#43E0
+        LD      DE,(PaletteDestBase)
         CALL    PaletteReadByte
         CALL    ConvertRgb8ToRgb6
         LD      (DE),A
@@ -1850,6 +1946,18 @@ MapPaletteSourcePage:
         LD      (Page3Owner),A
         LD      A,(PaletteSourcePage)
         LD      (Page3MappedPage),A
+        RET
+
+SetPaletteDestBaseForWriteScreen:
+        LD      A,(VideoWriteScreen)
+        CP      RGMOD_SCR_B
+        JR      Z,.screen_b
+        LD      HL,#43E0
+        LD      (PaletteDestBase),HL
+        RET
+.screen_b:
+        LD      HL,#43E4
+        LD      (PaletteDestBase),HL
         RET
 
 PrintFileInfo:
@@ -2113,6 +2221,14 @@ InitPlaybackVideo:
 .mode_ok:
         LD      A,#01
         LD      (VideoInitializedFlag),A
+        XOR     A
+        LD      (VideoVisibleScreen),A
+        LD      A,RGMOD_SCR_B
+        LD      (VideoWriteScreen),A
+        LD      HL,VIDEO_SCREEN_B_OFFSET
+        LD      (VideoWriteOffset),HL
+        XOR     A
+        OUT     (RGMOD),A
         CALL    ClearVideoBuffers
         CALL    LoadPreparedGlobalPalette
         RET
@@ -2165,7 +2281,7 @@ ClearVideoBuffers:
         LD      (SavedPage1),A
         LD      A,VIDEO_PAGE_A
         OUT     (PAGE1),A
-        CALL    ClearVisibleScreenRows
+        CALL    ClearVideoRowsBothScreens
         XOR     A
         OUT     (RGMOD),A
         LD      A,#C0
@@ -2173,13 +2289,13 @@ ClearVideoBuffers:
         CALL    RestorePage1
         RET
 
-ClearVisibleScreenRows:
+ClearVideoRowsBothScreens:
         XOR     A
         LD      (VideoRowIndex),A
 .loop:
         LD      A,(VideoRowIndex)
         OUT     (PORT_Y),A
-        CALL    ClearVideoRowA
+        CALL    ClearVideoRowBothScreens
         LD      HL,VideoRowIndex
         INC     (HL)
         LD      A,(HL)
@@ -2187,10 +2303,10 @@ ClearVisibleScreenRows:
         JR      NZ,.loop
         RET     Z
 
-ClearVideoRowA:
+ClearVideoRowBothScreens:
         LD      HL,WORK_WINDOW
         LD      DE,WORK_WINDOW + 1
-        LD      BC,GIF_MAX_WIDTH - 1
+        LD      BC,#027F
         XOR     A
         LD      (HL),A
         LDIR
@@ -2218,8 +2334,6 @@ BlitCanvasToVideo:
         LD      A,(HL)
         OR      A
         JR      NZ,.row_loop
-        XOR     A
-        OUT     (RGMOD),A
         LD      A,#C0
         OUT     (PORT_Y),A
         CALL    RestorePage3
@@ -2227,7 +2341,10 @@ BlitCanvasToVideo:
         RET
 
 BlitCanvasRowToVideo:
-        LD      DE,WORK_WINDOW
+        LD      HL,WORK_WINDOW
+        LD      DE,(VideoWriteOffset)
+        ADD     HL,DE
+        EX      DE,HL
         LD      BC,GIF_MAX_WIDTH
 .loop:
         LD      HL,(BlitSourcePtr)
@@ -2395,6 +2512,8 @@ BlitDirtyCanvasToVideo:
         LD      HL,(DirtyLeft)
         LD      DE,(DisplayOffsetX)
         ADD     HL,DE
+        LD      DE,(VideoWriteOffset)
+        ADD     HL,DE
         LD      (BlitRectLeft),HL
         LD      HL,(DirtyTop)
         LD      A,L
@@ -2415,8 +2534,6 @@ BlitDirtyCanvasToVideo:
         LD      A,H
         OR      L
         JR      NZ,.row_loop
-        XOR     A
-        OUT     (RGMOD),A
         LD      A,#C0
         OUT     (PORT_Y),A
         CALL    RestorePage3
@@ -2434,6 +2551,24 @@ BlitDirtyCanvasRowToVideo:
         ADD     HL,BC
         POP     HL
         JR      C,.byte_loop
+        LD      A,B
+        OR      A
+        JR      NZ,.ldir_copy
+        LD      A,C
+        DI
+        LD      D,D
+        LD      (DE),A
+        LD      B,B
+        LD      L,L
+        LD      A,(HL)
+        LD      (DE),A
+        LD      B,B
+        EI
+        LD      BC,(BlitRectWidth)
+        ADD     HL,BC
+        LD      (BlitSourcePtr),HL
+        RET
+.ldir_copy:
         LDIR
         LD      (BlitSourcePtr),HL
         RET
@@ -2487,7 +2622,10 @@ PlayGifFrames:
         CALL    RestorePage1
         CALL    RestorePage2
         CALL    RestorePage3
+        CALL    BlitDirtyCanvasToVideo
         CALL    LoadCurrentFramePalette
+        HALT
+        CALL    FlipVideoBuffers
         CALL    BlitDirtyCanvasToVideo
         CALL    ResetDirtyRect
         CALL    WaitFrameDelayOrKey
@@ -2496,6 +2634,26 @@ PlayGifFrames:
         CALL    AdvancePlaybackFrame
         RET     C
         JR      .loop
+
+FlipVideoBuffers:
+        LD      A,(VideoVisibleScreen)
+        XOR     #01
+        AND     #01
+        LD      (VideoVisibleScreen),A
+        OUT     (RGMOD),A
+        OR      A
+        JR      Z,.write_b
+        XOR     A
+        LD      (VideoWriteScreen),A
+        LD      HL,VIDEO_SCREEN_A_OFFSET
+        LD      (VideoWriteOffset),HL
+        RET
+.write_b:
+        LD      A,RGMOD_SCR_B
+        LD      (VideoWriteScreen),A
+        LD      HL,VIDEO_SCREEN_B_OFFSET
+        LD      (VideoWriteOffset),HL
+        RET
 
 ApplyCurrentFrameDisposal:
         CALL    GetCurrentFrameEntryPtr
@@ -2755,6 +2913,12 @@ CanvasFillByte:
         DB      #00
 VideoInitializedFlag:
         DB      #00
+VideoVisibleScreen:
+        DB      #00
+VideoWriteScreen:
+        DB      RGMOD_SCR_B
+VideoWriteOffset:
+        DW      VIDEO_SCREEN_B_OFFSET
 SavedVideoMode:
         DB      #00
 SavedVideoBank:
@@ -2947,6 +3111,8 @@ CanvasFrameTop:
         DW      #0000
 CanvasFrameWidth:
         DW      #0000
+CanvasFrameHeight:
+        DW      #0000
 CanvasFrameXRemaining:
         DW      #0000
 CanvasRowsRemaining:
@@ -2959,6 +3125,14 @@ CanvasTransparentFlag:
         DB      #00
 CanvasTransparentIndex:
         DB      #00
+CanvasInterlaceFlag:
+        DB      #00
+CanvasInterlacePass:
+        DB      #00
+CanvasCurrentRow:
+        DW      #0000
+CanvasSeekTop:
+        DW      #0000
 PaletteLoadPtr:
         DW      #0000
 PaletteLoadIndex:
@@ -2973,6 +3147,8 @@ PaletteFramePacked:
         DB      #00
 PaletteReadValue:
         DB      #00
+PaletteDestBase:
+        DW      #43E0
 AppIdBuffer:
         DS      11,#00
 AppIdNetscape:
