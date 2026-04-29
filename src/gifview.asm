@@ -59,6 +59,7 @@ Main:
         LD      (CurrentPlaybackFrame),A
         LD      (CurrentPlaybackFrame + 1),A
         CALL    ClearKeyboardBuffer
+        CALL    WaitKeyRelease
         CALL    InitPlaybackVideo
         CALL    PlayGifFrames
 ExitSuccess:
@@ -562,6 +563,8 @@ ParseGifHeader:
         LD      (GifHeight),HL
         LD      A,(LOAD_WINDOW + 10)
         LD      (GifPacked),A
+        LD      A,(LOAD_WINDOW + 11)
+        LD      (GifBackgroundColor),A
         CALL    CalculateGlobalColorTableSize
         CALL    RestorePage3
         CALL    ValidateGifDimensions
@@ -1900,6 +1903,7 @@ ClearWorkingMemory:
         LD      A,(CanvasMemoryBlockId)
         LD      C,CANVAS_MEMORY_PAGES
         CALL    ClearMemoryBlock
+        CALL    FillCanvasMemoryWithBackground
         LD      A,(LzwMemoryBlockId)
         LD      C,LZW_WORKSPACE_PAGES
         CALL    ClearMemoryBlock
@@ -1938,6 +1942,37 @@ ClearLoadWindow:
         LD      DE,LOAD_WINDOW + 1
         LD      BC,PAGE_SIZE - 1
         XOR     A
+        LD      (HL),A
+        LDIR
+        RET
+
+FillCanvasMemoryWithBackground:
+        LD      A,(GifBackgroundColor)
+        OR      A
+        RET     Z
+        LD      (CanvasFillByte),A
+        XOR     A
+        LD      (ClearPageIndex),A
+.loop:
+        LD      A,(ClearPageIndex)
+        CP      CANVAS_MEMORY_PAGES
+        JR      Z,.done
+        CALL    MapCanvasPageIndexToPage3
+        CALL    FillLoadWindow
+        LD      A,(ClearPageIndex)
+        INC     A
+        LD      (ClearPageIndex),A
+        JR      .loop
+.done:
+        XOR     A
+        LD      (Page3Owner),A
+        RET
+
+FillLoadWindow:
+        LD      HL,LOAD_WINDOW
+        LD      DE,LOAD_WINDOW + 1
+        LD      BC,PAGE_SIZE - 1
+        LD      A,(CanvasFillByte)
         LD      (HL),A
         LDIR
         RET
@@ -2095,17 +2130,272 @@ MapBlitCanvasPage:
         LD      A,(BlitSourcePage)
         JP      MapCanvasPageIndexToPage3
 
+ResetDirtyRect:
+        XOR     A
+        LD      (DirtyFlag),A
+        RET
+
+MarkCurrentFrameDirty:
+        CALL    GetCurrentFrameEntryPtr
+        LD      DE,6
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (DirtyInputLeft),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (DirtyInputTop),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        PUSH    HL
+        LD      HL,(DirtyInputLeft)
+        ADD     HL,DE
+        LD      (DirtyInputRight),HL
+        POP     HL
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      HL,(DirtyInputTop)
+        ADD     HL,DE
+        LD      (DirtyInputBottom),HL
+        JP      MarkDirtyRectFromInput
+
+MarkDirtyRectFromInput:
+        LD      A,(DirtyFlag)
+        OR      A
+        JR      NZ,.merge
+        LD      A,#01
+        LD      (DirtyFlag),A
+        LD      HL,(DirtyInputLeft)
+        LD      (DirtyLeft),HL
+        LD      HL,(DirtyInputTop)
+        LD      (DirtyTop),HL
+        LD      HL,(DirtyInputRight)
+        LD      (DirtyRight),HL
+        LD      HL,(DirtyInputBottom)
+        LD      (DirtyBottom),HL
+        RET
+.merge:
+        LD      HL,(DirtyInputLeft)
+        LD      DE,(DirtyLeft)
+        CALL    CompareHLDE
+        JR      NC,.top
+        LD      (DirtyLeft),HL
+.top:
+        LD      HL,(DirtyInputTop)
+        LD      DE,(DirtyTop)
+        CALL    CompareHLDE
+        JR      NC,.right
+        LD      (DirtyTop),HL
+.right:
+        LD      HL,(DirtyRight)
+        LD      DE,(DirtyInputRight)
+        CALL    CompareHLDE
+        JR      NC,.bottom
+        LD      HL,(DirtyInputRight)
+        LD      (DirtyRight),HL
+.bottom:
+        LD      HL,(DirtyBottom)
+        LD      DE,(DirtyInputBottom)
+        CALL    CompareHLDE
+        RET     NC
+        LD      HL,(DirtyInputBottom)
+        LD      (DirtyBottom),HL
+        RET
+
+BlitDirtyCanvasToVideo:
+        LD      A,(DirtyFlag)
+        OR      A
+        RET     Z
+        LD      HL,(DirtyRight)
+        LD      DE,(DirtyLeft)
+        OR      A
+        SBC     HL,DE
+        LD      A,H
+        OR      L
+        RET     Z
+        LD      (BlitRectWidth),HL
+        LD      HL,(DirtyBottom)
+        LD      DE,(DirtyTop)
+        OR      A
+        SBC     HL,DE
+        LD      A,H
+        OR      L
+        RET     Z
+        LD      (BlitRectRows),HL
+        LD      HL,GIF_MAX_WIDTH
+        LD      DE,(BlitRectWidth)
+        OR      A
+        SBC     HL,DE
+        LD      (BlitRowSkip),HL
+        IN      A,(PAGE3)
+        LD      (SavedPage3),A
+        IN      A,(PAGE1)
+        LD      (SavedPage1),A
+        LD      A,VIDEO_PAGE_A
+        OUT     (PAGE1),A
+        XOR     A
+        LD      (CanvasOutputPage),A
+        LD      (CanvasOutputDoneFlag),A
+        LD      HL,CANVAS_WINDOW
+        LD      (CanvasOutputPtr),HL
+        LD      HL,(DirtyLeft)
+        LD      (CanvasFrameLeft),HL
+        LD      HL,(DirtyTop)
+        LD      (CanvasFrameTop),HL
+        CALL    CanvasSeekFrameStart
+        LD      A,(CanvasOutputPage)
+        LD      (BlitSourcePage),A
+        LD      HL,(CanvasOutputPtr)
+        LD      (BlitSourcePtr),HL
+        CALL    MapBlitCanvasPage
+        LD      HL,(DirtyLeft)
+        LD      (BlitRectLeft),HL
+        LD      HL,(DirtyTop)
+        LD      A,L
+        LD      (VideoRowIndex),A
+.row_loop:
+        LD      A,(VideoRowIndex)
+        OUT     (PORT_Y),A
+        CALL    BlitDirtyCanvasRowToVideo
+        LD      DE,(BlitRowSkip)
+        CALL    AdvanceBlitSourcePtrByDE
+        LD      HL,VideoRowIndex
+        INC     (HL)
+        LD      HL,(BlitRectRows)
+        DEC     HL
+        LD      (BlitRectRows),HL
+        LD      A,H
+        OR      L
+        JR      NZ,.row_loop
+        XOR     A
+        OUT     (RGMOD),A
+        LD      A,#C0
+        OUT     (PORT_Y),A
+        CALL    RestorePage3
+        CALL    RestorePage1
+        RET
+
+BlitDirtyCanvasRowToVideo:
+        LD      HL,WORK_WINDOW
+        LD      DE,(BlitRectLeft)
+        ADD     HL,DE
+        EX      DE,HL
+        LD      BC,(BlitRectWidth)
+.loop:
+        LD      HL,(BlitSourcePtr)
+        LD      A,(HL)
+        LD      (DE),A
+        INC     HL
+        LD      A,H
+        OR      A
+        JR      NZ,.source_ok
+        LD      HL,LOAD_WINDOW
+        LD      (BlitSourcePtr),HL
+        PUSH    BC
+        PUSH    DE
+        CALL    AdvanceBlitCanvasPage
+        POP     DE
+        POP     BC
+        JR      .dest_next
+.source_ok:
+        LD      (BlitSourcePtr),HL
+.dest_next:
+        INC     DE
+        DEC     BC
+        LD      A,B
+        OR      C
+        JR      NZ,.loop
+        RET
+
+AdvanceBlitSourcePtrByDE:
+        LD      HL,(BlitSourcePtr)
+        ADD     HL,DE
+        JR      NC,.store_ptr
+        PUSH    HL
+        LD      A,(BlitSourcePage)
+        INC     A
+        LD      (BlitSourcePage),A
+        CALL    MapBlitCanvasPage
+        POP     HL
+        LD      DE,LOAD_WINDOW
+        ADD     HL,DE
+.store_ptr:
+        LD      (BlitSourcePtr),HL
+        RET
+
 PlayGifFrames:
+        CALL    ResetDirtyRect
+.loop:
         CALL    DecodeCurrentFrameToCanvas
+        CALL    MarkCurrentFrameDirty
         CALL    RestorePage1
         CALL    RestorePage2
         CALL    RestorePage3
-        CALL    BlitCanvasToVideo
+        CALL    BlitDirtyCanvasToVideo
+        CALL    ResetDirtyRect
         CALL    WaitFrameDelayOrKey
         RET     C
+        CALL    ApplyCurrentFrameDisposal
         CALL    AdvancePlaybackFrame
         RET     C
-        JR      PlayGifFrames
+        JR      .loop
+
+ApplyCurrentFrameDisposal:
+        CALL    GetCurrentFrameEntryPtr
+        LD      DE,16
+        ADD     HL,DE
+        LD      A,(HL)
+        AND     #1C
+        CP      #08
+        RET     NZ
+        JP      ClearCurrentFrameRectToBackground
+
+ClearCurrentFrameRectToBackground:
+        XOR     A
+        LD      (CanvasOutputPage),A
+        LD      (CanvasOutputDoneFlag),A
+        LD      (CanvasTransparentFlag),A
+        LD      HL,CANVAS_WINDOW
+        LD      (CanvasOutputPtr),HL
+        CALL    GetCurrentFrameEntryPtr
+        LD      DE,6
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameLeft),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameTop),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameWidth),DE
+        LD      (CanvasFrameXRemaining),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasRowsRemaining),DE
+        CALL    CanvasSeekFrameStart
+        CALL    MapCanvasOutputPage
+.loop:
+        LD      A,(GifBackgroundColor)
+        CALL    CanvasPutPixel
+        JP      C,LzwCanvasOverflow
+        CALL    IsCanvasComplete
+        JR      Z,.loop
+        JP      MarkCurrentFrameDirty
 
 AdvancePlaybackFrame:
         LD      HL,(CurrentPlaybackFrame)
@@ -2279,6 +2569,12 @@ ClearKeyboardBuffer:
         RST     Dss.Rst
         RET
 
+WaitKeyRelease:
+        CALL    PollExitKey
+        RET     NC
+        HALT
+        JR      WaitKeyRelease
+
 GifCacheCodeStored:
         INCLUDE "cache_code.asm"
 GifCacheCodeEnd:
@@ -2305,6 +2601,8 @@ ClearBlockId:
         DB      #00
 ClearPageIndex:
         DB      #00
+CanvasFillByte:
+        DB      #00
 VideoInitializedFlag:
         DB      #00
 SavedVideoMode:
@@ -2325,6 +2623,32 @@ BlitSourcePtr:
         DW      #0000
 VideoRowIndex:
         DB      #00
+DirtyFlag:
+        DB      #00
+DirtyLeft:
+        DW      #0000
+DirtyTop:
+        DW      #0000
+DirtyRight:
+        DW      #0000
+DirtyBottom:
+        DW      #0000
+DirtyInputLeft:
+        DW      #0000
+DirtyInputTop:
+        DW      #0000
+DirtyInputRight:
+        DW      #0000
+DirtyInputBottom:
+        DW      #0000
+BlitRectLeft:
+        DW      #0000
+BlitRectWidth:
+        DW      #0000
+BlitRectRows:
+        DW      #0000
+BlitRowSkip:
+        DW      #0000
 SavedPage1:
         DB      #FF
 SavedPage2:
@@ -2358,6 +2682,8 @@ GifGctEntries:
 GifGctBytes:
         DW      #0000
 GifPacked:
+        DB      #00
+GifBackgroundColor:
         DB      #00
 GifGctFlag:
         DB      #00
