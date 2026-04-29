@@ -73,6 +73,7 @@ CacheLzwResetDictionary:
         LD      A,(LzwMinCodeSize)
         INC     A
         LD      (LzwCodeSize),A
+        CALL    CacheLzwSetCodeMask
         RET
 
 CacheLzwReadFirstDataCode:
@@ -154,6 +155,7 @@ CacheLzwAddDictionaryEntry:
         LD      A,(LzwCodeSize)
         INC     A
         LD      (LzwCodeSize),A
+        CALL    CacheLzwSetCodeMask
         RET
 
 CacheLzwReadPrefix:
@@ -217,6 +219,12 @@ CacheLzwPowerOfTwo:
         DJNZ    .loop
         RET
 
+CacheLzwSetCodeMask:
+        CALL    CacheLzwPowerOfTwo
+        DEC     HL
+        LD      (LzwCodeMask),HL
+        RET
+
 CacheIsCanvasComplete:
         LD      A,(CanvasOutputDoneFlag)
         OR      A
@@ -227,6 +235,89 @@ CacheCompareHLDE:
         OR      A
         SBC     HL,DE
         POP     HL
+        RET
+
+CacheLzwReadCodeFast:
+        LD      A,(LzwCodeSize)
+        LD      C,A
+.fill_loop:
+        LD      A,(LzwBitCount)
+        CP      C
+        JR      NC,.have_bits
+        CALL    CacheFrameStreamGetByte
+        RET     C
+        CALL    CacheLzwAppendByteToBitBuffer
+        LD      HL,LzwBitCount
+        LD      A,(HL)
+        ADD     A,#08
+        LD      (HL),A
+        JR      .fill_loop
+.have_bits:
+        LD      HL,(LzwBitBuffer)
+        LD      DE,(LzwCodeMask)
+        LD      A,H
+        AND     D
+        LD      H,A
+        LD      A,L
+        AND     E
+        LD      L,A
+        LD      B,C
+.shift_loop:
+        LD      A,B
+        OR      A
+        JR      Z,.shift_done
+        PUSH    HL
+        LD      HL,LzwBitBufferHigh
+        SRL     (HL)
+        DEC     HL
+        RR      (HL)
+        DEC     HL
+        RR      (HL)
+        POP     HL
+        DJNZ    .shift_loop
+.shift_done:
+        LD      A,(LzwBitCount)
+        SUB     C
+        LD      (LzwBitCount),A
+        OR      A
+        RET
+
+CacheLzwAppendByteToBitBuffer:
+        LD      HL,LzwShiftBuffer
+        LD      (HL),A
+        INC     HL
+        LD      (HL),#00
+        INC     HL
+        LD      (HL),#00
+        LD      A,(LzwBitCount)
+        LD      B,A
+.shift_new_byte:
+        LD      A,B
+        OR      A
+        JR      Z,.merge
+        LD      HL,LzwShiftBuffer
+        SLA     (HL)
+        INC     HL
+        RL      (HL)
+        INC     HL
+        RL      (HL)
+        DJNZ    .shift_new_byte
+.merge:
+        LD      HL,LzwShiftBuffer
+        LD      DE,LzwBitBuffer
+        LD      A,(DE)
+        OR      (HL)
+        LD      (DE),A
+        INC     HL
+        INC     DE
+        LD      A,(DE)
+        OR      (HL)
+        LD      (DE),A
+        INC     HL
+        LD      DE,LzwBitBufferHigh
+        LD      A,(DE)
+        OR      (HL)
+        LD      (DE),A
         RET
 
 CacheLzwReadCode:

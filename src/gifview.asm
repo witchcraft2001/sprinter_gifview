@@ -1063,6 +1063,10 @@ LzwInitCodeReader:
         XOR     A
         LD      (LzwCurrentByte),A
         LD      (LzwBitsRemaining),A
+        LD      (LzwBitCount),A
+        LD      (LzwBitBuffer),A
+        LD      (LzwBitBuffer + 1),A
+        LD      (LzwBitBufferHigh),A
         LD      A,(LzwMinCodeSize)
         CALL    LzwPowerOfTwo
         LD      (LzwClearCode),HL
@@ -3119,6 +3123,16 @@ LzwBitsRemaining:
         DB      #00
 LzwReadBitValue:
         DB      #00
+LzwBitBuffer:
+        DW      #0000
+LzwBitBufferHigh:
+        DB      #00
+LzwBitCount:
+        DB      #00
+LzwCodeMask:
+        DW      #0000
+LzwShiftBuffer:
+        DB      #00,#00,#00
 LzwClearCode:
         DW      #0000
 LzwEndCode:
