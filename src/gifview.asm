@@ -1545,20 +1545,23 @@ LzwUnsupportedCodeSize:
         JP      ExitWithError
 
 CalcColorTableBytesFromPacked:
+        CALL    CalcColorTableEntriesFromPacked
+        LD      D,H
+        LD      E,L
+        ADD     HL,HL
+        ADD     HL,DE
+        RET
+
+CalcColorTableEntriesFromPacked:
         AND     #07
         LD      B,A
         LD      HL,#0002
 .loop:
         LD      A,B
         OR      A
-        JR      Z,.entries_ready
+        RET     Z
         ADD     HL,HL
         DJNZ    .loop
-.entries_ready:
-        LD      D,H
-        LD      E,L
-        ADD     HL,HL
-        ADD     HL,DE
         RET
 
 ParseExtensionBlock:
@@ -1743,6 +1746,111 @@ LoadPreparedGlobalPalette:
         LD      A,#C0
         OUT     (PORT_Y),A
         JP      RestorePage1
+
+LoadCurrentFramePalette:
+        IN      A,(PAGE3)
+        LD      (SavedPage3),A
+        IN      A,(PAGE1)
+        LD      (SavedPage1),A
+        CALL    GetCurrentFrameEntryPtr
+        LD      DE,3
+        ADD     HL,DE
+        LD      A,(HL)
+        LD      (PaletteSourcePage),A
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (PaletteSourcePtr),DE
+        CALL    GetCurrentFrameEntryPtr
+        LD      DE,14
+        ADD     HL,DE
+        LD      A,(HL)
+        LD      (PaletteFramePacked),A
+        BIT     7,A
+        JR      Z,.global_palette
+        CALL    CalcColorTableEntriesFromPacked
+        JR      .entries_ready
+.global_palette:
+        LD      HL,(GifGctEntries)
+        LD      A,H
+        OR      L
+        JR      Z,.done
+.entries_ready:
+        LD      (PaletteEntriesRemaining),HL
+        LD      A,VIDEO_PAGE_A
+        OUT     (PAGE1),A
+        XOR     A
+        LD      (PaletteLoadIndex),A
+        CALL    MapPaletteSourcePage
+.loop:
+        LD      A,(PaletteLoadIndex)
+        OUT     (PORT_Y),A
+        LD      DE,#43E0
+        CALL    PaletteReadByte
+        CALL    ConvertRgb8ToRgb6
+        LD      (DE),A
+        INC     E
+        CALL    PaletteReadByte
+        CALL    ConvertRgb8ToRgb6
+        LD      (DE),A
+        INC     E
+        CALL    PaletteReadByte
+        CALL    ConvertRgb8ToRgb6
+        LD      (DE),A
+        LD      HL,PaletteLoadIndex
+        INC     (HL)
+        LD      HL,(PaletteEntriesRemaining)
+        DEC     HL
+        LD      (PaletteEntriesRemaining),HL
+        LD      A,H
+        OR      L
+        JR      NZ,.loop
+.done:
+        LD      A,#C0
+        OUT     (PORT_Y),A
+        CALL    RestorePage3
+        JP      RestorePage1
+
+PaletteReadByte:
+        PUSH    HL
+        CALL    MapPaletteSourcePage
+        LD      HL,(PaletteSourcePtr)
+        LD      A,(HL)
+        LD      (PaletteReadValue),A
+        INC     HL
+        LD      A,H
+        OR      A
+        JR      NZ,.store_ptr
+        LD      HL,LOAD_WINDOW
+        LD      (PaletteSourcePtr),HL
+        LD      HL,PaletteSourcePage
+        INC     (HL)
+        JR      .done
+.store_ptr:
+        LD      (PaletteSourcePtr),HL
+.done:
+        POP     HL
+        LD      A,(PaletteReadValue)
+        RET
+
+MapPaletteSourcePage:
+        LD      A,(Page3Owner)
+        CP      #04
+        JR      NZ,.map_page
+        LD      A,(Page3MappedPage)
+        LD      B,A
+        LD      A,(PaletteSourcePage)
+        CP      B
+        RET     Z
+.map_page:
+        LD      A,(PaletteSourcePage)
+        CALL    MapGifPageIndexToPage3
+        LD      A,#04
+        LD      (Page3Owner),A
+        LD      A,(PaletteSourcePage)
+        LD      (Page3MappedPage),A
+        RET
 
 PrintFileInfo:
         LD      HL,MsgSelectedFile
@@ -1989,6 +2097,7 @@ ClearWorkWindow:
 InitPlaybackVideo:
         IN      A,(RGMOD)
         LD      (SavedRGMOD),A
+        CALL    PrepareDisplayOffsets
         LD      C,Dss.GetVMod
         RST     Dss.Rst
         LD      (SavedVideoMode),A
@@ -2006,6 +2115,34 @@ InitPlaybackVideo:
         LD      (VideoInitializedFlag),A
         CALL    ClearVideoBuffers
         CALL    LoadPreparedGlobalPalette
+        RET
+
+PrepareDisplayOffsets:
+        LD      HL,#0000
+        LD      (DisplayOffsetX),HL
+        XOR     A
+        LD      (DisplayOffsetY),A
+        LD      A,(OptionFlags)
+        AND     FLAG_CENTER
+        RET     Z
+        LD      HL,GIF_MAX_WIDTH
+        LD      DE,(GifWidth)
+        OR      A
+        SBC     HL,DE
+        JR      C,.y_offset
+        SRL     H
+        RR      L
+        LD      (DisplayOffsetX),HL
+.y_offset:
+        LD      HL,GIF_MAX_HEIGHT
+        LD      DE,(GifHeight)
+        OR      A
+        SBC     HL,DE
+        RET     C
+        SRL     H
+        RR      L
+        LD      A,L
+        LD      (DisplayOffsetY),A
         RET
 
 RestorePlaybackVideo:
@@ -2256,9 +2393,13 @@ BlitDirtyCanvasToVideo:
         LD      (BlitSourcePtr),HL
         CALL    MapBlitCanvasPage
         LD      HL,(DirtyLeft)
+        LD      DE,(DisplayOffsetX)
+        ADD     HL,DE
         LD      (BlitRectLeft),HL
         LD      HL,(DirtyTop)
         LD      A,L
+        LD      HL,DisplayOffsetY
+        ADD     A,(HL)
         LD      (VideoRowIndex),A
 .row_loop:
         LD      A,(VideoRowIndex)
@@ -2288,7 +2429,15 @@ BlitDirtyCanvasRowToVideo:
         ADD     HL,DE
         EX      DE,HL
         LD      BC,(BlitRectWidth)
-.loop:
+        LD      HL,(BlitSourcePtr)
+        PUSH    HL
+        ADD     HL,BC
+        POP     HL
+        JR      C,.byte_loop
+        LDIR
+        LD      (BlitSourcePtr),HL
+        RET
+.byte_loop:
         LD      HL,(BlitSourcePtr)
         LD      A,(HL)
         LD      (DE),A
@@ -2311,7 +2460,7 @@ BlitDirtyCanvasRowToVideo:
         DEC     BC
         LD      A,B
         OR      C
-        JR      NZ,.loop
+        JR      NZ,.byte_loop
         RET
 
 AdvanceBlitSourcePtrByDE:
@@ -2338,6 +2487,7 @@ PlayGifFrames:
         CALL    RestorePage1
         CALL    RestorePage2
         CALL    RestorePage3
+        CALL    LoadCurrentFramePalette
         CALL    BlitDirtyCanvasToVideo
         CALL    ResetDirtyRect
         CALL    WaitFrameDelayOrKey
@@ -2623,6 +2773,10 @@ BlitSourcePtr:
         DW      #0000
 VideoRowIndex:
         DB      #00
+DisplayOffsetX:
+        DW      #0000
+DisplayOffsetY:
+        DB      #00
 DirtyFlag:
         DB      #00
 DirtyLeft:
@@ -2808,6 +2962,16 @@ CanvasTransparentIndex:
 PaletteLoadPtr:
         DW      #0000
 PaletteLoadIndex:
+        DB      #00
+PaletteSourcePage:
+        DB      #00
+PaletteSourcePtr:
+        DW      #0000
+PaletteEntriesRemaining:
+        DW      #0000
+PaletteFramePacked:
+        DB      #00
+PaletteReadValue:
         DB      #00
 AppIdBuffer:
         DS      11,#00
