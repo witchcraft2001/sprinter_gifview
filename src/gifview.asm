@@ -2218,11 +2218,19 @@ FillCanvasMemoryWithBackground:
 
 FillLoadWindow:
         LD      HL,LOAD_WINDOW
-        LD      DE,LOAD_WINDOW + 1
-        LD      BC,PAGE_SIZE - 1
         LD      A,(CanvasFillByte)
-        LD      (HL),A
-        LDIR
+        LD      C,A
+        LD      B,#40
+        DI
+.loop:
+        LD      D,D
+        LD      A,#00
+        LD      C,C
+        LD      (HL),C
+        LD      B,B
+        INC     H
+        DJNZ    .loop
+        EI
         RET
 
 ClearWorkWindow:
@@ -2732,20 +2740,105 @@ ClearCurrentFrameRectToBackground:
         LD      D,(HL)
         LD      (CanvasFrameWidth),DE
         LD      (CanvasFrameXRemaining),DE
+        LD      A,D
+        OR      E
+        RET     Z
         INC     HL
         LD      E,(HL)
         INC     HL
         LD      D,(HL)
         LD      (CanvasRowsRemaining),DE
+        LD      (BlitRectRows),DE
+        LD      A,D
+        OR      E
+        RET     Z
         CALL    CanvasSeekFrameStart
         CALL    MapCanvasOutputPage
-.loop:
-        LD      A,(GifBackgroundColor)
-        CALL    CacheCanvasPutPixel
+        LD      HL,GIF_MAX_WIDTH
+        LD      DE,(CanvasFrameWidth)
+        OR      A
+        SBC     HL,DE
+        LD      (BlitRowSkip),HL
+.row_loop:
+        CALL    FillCanvasRowWithBackgroundAcc
         JP      C,LzwCanvasOverflow
-        CALL    IsCanvasComplete
-        JR      Z,.loop
+        LD      DE,(BlitRowSkip)
+        CALL    CanvasAdvanceOutputPtrByDE
+        JP      C,LzwCanvasOverflow
+        LD      HL,(BlitRectRows)
+        DEC     HL
+        LD      (BlitRectRows),HL
+        LD      A,H
+        OR      L
+        JR      NZ,.row_loop
         JP      MarkCurrentFrameDirty
+
+FillCanvasRowWithBackgroundAcc:
+        LD      HL,(CanvasFrameWidth)
+        LD      (FillRectRemaining),HL
+.segment_loop:
+        LD      HL,(FillRectRemaining)
+        LD      A,H
+        OR      L
+        RET     Z
+        LD      B,H
+        LD      C,L
+        CALL    GetCanvasFillSegmentLength
+        PUSH    DE
+        CALL    MapCanvasOutputPage
+        LD      HL,(CanvasOutputPtr)
+        LD      A,(GifBackgroundColor)
+        CALL    AccFillMemorySegmentNoEi
+        POP     DE
+        PUSH    DE
+        CALL    CanvasAdvanceOutputPtrByDE
+        POP     DE
+        RET     C
+        LD      HL,(FillRectRemaining)
+        OR      A
+        SBC     HL,DE
+        LD      (FillRectRemaining),HL
+        JR      .segment_loop
+
+GetCanvasFillSegmentLength:
+        LD      A,B
+        OR      A
+        JR      NZ,.max_len
+        LD      A,C
+        CP      #00
+        JR      NZ,.base_len
+.max_len:
+        LD      A,#FF
+.base_len:
+        LD      E,A
+        LD      HL,(CanvasOutputPtr)
+        LD      A,H
+        CP      #FF
+        JR      NZ,.done
+        LD      A,L
+        OR      A
+        JR      Z,.done
+        CPL
+        INC     A
+        CP      E
+        JR      NC,.done
+        LD      E,A
+.done:
+        LD      D,#00
+        RET
+
+AccFillMemorySegmentNoEi:
+        LD      C,A
+        LD      A,E
+        LD      (.length + 1),A
+        DI
+        LD      D,D
+.length:
+        LD      A,#00
+        LD      C,C
+        LD      (HL),C
+        LD      B,B
+        RET
 
 AdvancePlaybackFrame:
         LD      HL,(CurrentPlaybackFrame)
@@ -3008,6 +3101,8 @@ BlitRectWidth:
 BlitRectRows:
         DW      #0000
 BlitRowSkip:
+        DW      #0000
+FillRectRemaining:
         DW      #0000
 SavedPage1:
         DB      #FF
