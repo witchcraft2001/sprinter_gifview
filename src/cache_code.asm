@@ -545,6 +545,10 @@ CacheMapPageTableIndexToPage3:
         OR      A
         RET
 
+CacheMapCanvasPageIndexToPage3:
+        LD      HL,CanvasPageTable
+        JP      CacheMapPageTableIndexToPage3
+
 CacheMapPageTableIndexToPage1:
         PUSH    DE
         LD      E,A
@@ -764,7 +768,7 @@ CacheMapCanvasOutputPage:
         RET     Z
 .map_page:
         LD      A,(CanvasOutputPage)
-        CALL    MapCanvasPageIndexToPage3
+        CALL    CacheMapCanvasPageIndexToPage3
         LD      A,#02
         LD      (Page3Owner),A
         LD      A,(CanvasOutputPage)
@@ -986,7 +990,7 @@ CacheCopyCanvasPrevRows:
 .copy_segment:
         POP     BC
         PUSH    BC
-        LDIR
+        CALL    CacheAccCopyMemorySegmentNoEi
         POP     DE
         PUSH    DE
         CALL    CacheCanvasAdvanceOutputPtrByDE
@@ -1165,6 +1169,18 @@ CacheAccFillMemorySegmentNoEi:
         LD      B,B
         RET
 
+CacheAccCopyMemorySegmentNoEi:
+        LD      A,C
+        DI
+        LD      D,D
+        LD      (DE),A
+        LD      B,B
+        LD      L,L
+        LD      A,(HL)
+        LD      (DE),A
+        LD      B,B
+        RET
+
 CacheBlitDirtyCanvasRowToVideo:
         LD      HL,WORK_WINDOW
         LD      DE,(BlitRectLeft)
@@ -1180,20 +1196,27 @@ CacheBlitDirtyCanvasRowToVideo:
         OR      A
         JR      NZ,.ldir_copy
         LD      A,C
-        DI
-        LD      D,D
-        LD      (DE),A
-        LD      B,B
-        LD      L,L
-        LD      A,(HL)
-        LD      (DE),A
-        LD      B,B
+        CALL    CacheAccCopyMemorySegmentNoEi
         LD      BC,(BlitRectWidth)
         ADD     HL,BC
         LD      (BlitSourcePtr),HL
         RET
 .ldir_copy:
-        LDIR
+        LD      A,C
+        PUSH    AF
+        LD      C,#FF
+        CALL    CacheAccCopyMemorySegmentNoEi
+        LD      BC,#00FF
+        ADD     HL,BC
+        EX      DE,HL
+        ADD     HL,BC
+        EX      DE,HL
+        POP     AF
+        INC     A
+        LD      C,A
+        CALL    CacheAccCopyMemorySegmentNoEi
+        LD      B,#00
+        ADD     HL,BC
         LD      (BlitSourcePtr),HL
         RET
 .byte_loop:
@@ -1208,7 +1231,7 @@ CacheBlitDirtyCanvasRowToVideo:
         LD      (BlitSourcePtr),HL
         PUSH    BC
         PUSH    DE
-        CALL    AdvanceBlitCanvasPage
+        CALL    CacheAdvanceBlitCanvasPage
         POP     DE
         POP     BC
         JR      .dest_next
@@ -1221,5 +1244,17 @@ CacheBlitDirtyCanvasRowToVideo:
         OR      C
         JR      NZ,.byte_loop
         RET
+
+CacheAdvanceBlitCanvasPage:
+        LD      A,(BlitSourcePage)
+        INC     A
+        LD      (BlitSourcePage),A
+        CP      CANVAS_MEMORY_PAGES
+        RET     NC
+        JP      CacheMapBlitCanvasPage
+
+CacheMapBlitCanvasPage:
+        LD      A,(BlitSourcePage)
+        JP      CacheMapCanvasPageIndexToPage3
 
         ENT

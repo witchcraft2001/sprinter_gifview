@@ -20,15 +20,16 @@
   contains the main LZW decode loop, dictionary expand/add/pop routines,
   GIF sub-block stream byte reader, per-pixel canvas output and dirty-row video
   blit, frame canvas setup, dirty-rect marking, and disposal method 2
-  accelerator fills. Next candidates are low-level page table mapping and
-  deeper LZW inner-loop optimizations.
+  accelerator fills. Low-level canvas page mapping used by the cache path now
+  also has cache-local helpers. Next candidate is deeper LZW inner-loop
+  optimization.
 - Replace CPU `LDIR`/byte loops in dirty-rect blits and canvas fills with
   Sprinter accelerator commands. Prefer preparing rectangular blocks so that
   `LD A,A`/vertical copy can move screen columns or strips in a tight loop;
   split widths larger than one accelerator block where needed.
-- Optimize disposal-3 backup/restore rectangle copies with the Sprinter
-  accelerator after correctness is verified; the initial implementation uses
-  CPU `LDIR` between mapped canvas and backup pages.
+- Verify accelerator-based disposal-3 backup/restore rectangle copies on real
+  Sprinter/DSS builds. The copy path now uses `LD L,L` accelerator segments
+  between mapped canvas and backup pages.
 - Rework the renderer so the hidden video screen can be used as the active GIF
   canvas instead of always decoding into a separate RAM canvas and then blitting
   it to VRAM. The target design is: keep the hidden screen coherent with the
