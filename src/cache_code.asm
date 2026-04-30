@@ -545,6 +545,17 @@ CacheMapPageTableIndexToPage3:
         OR      A
         RET
 
+CacheMapPageTableIndexToPage1:
+        PUSH    DE
+        LD      E,A
+        LD      D,#00
+        ADD     HL,DE
+        LD      A,(HL)
+        OUT     (PAGE1),A
+        POP     DE
+        OR      A
+        RET
+
 CacheInvalidGifBlock:
         CALL    RestoreSystemWindow
         JP      InvalidGifBlock
@@ -760,6 +771,11 @@ CacheMapCanvasOutputPage:
         LD      (Page3MappedPage),A
         RET
 
+CacheMapPrevCanvasOutputPage:
+        LD      A,(PrevOutputPage)
+        LD      HL,PrevCanvasPageTable
+        JP      CacheMapPageTableIndexToPage1
+
 CacheMarkCurrentFrameDirty:
         CALL    CacheGetCurrentFrameEntryPtr
         LD      DE,6
@@ -841,8 +857,188 @@ CacheApplyCurrentFrameDisposal:
         LD      A,(HL)
         AND     #1C
         CP      #08
+        JP      Z,CacheClearCurrentFrameRectToBackground
+        CP      #0C
         RET     NZ
-        JP      CacheClearCurrentFrameRectToBackground
+        JP      CacheRestoreCurrentFrameBackupForDisposal3
+
+CacheSaveCurrentFrameBackupForDisposal3:
+        LD      A,(PrevCanvasMemoryAllocatedFlag)
+        OR      A
+        RET     Z
+        CALL    CacheGetCurrentFrameEntryPtr
+        LD      DE,16
+        ADD     HL,DE
+        LD      A,(HL)
+        AND     #1C
+        CP      #0C
+        RET     NZ
+        CALL    CachePrepareCurrentFrameRectCopy
+        RET     Z
+        IN      A,(PAGE1)
+        LD      (PrevSavedPage1),A
+        CALL    CacheCopyCanvasRectToPrev
+        LD      A,(PrevSavedPage1)
+        OUT     (PAGE1),A
+        RET
+
+CacheRestoreCurrentFrameBackupForDisposal3:
+        LD      A,(PrevCanvasMemoryAllocatedFlag)
+        OR      A
+        RET     Z
+        CALL    CachePrepareCurrentFrameRectCopy
+        RET     Z
+        IN      A,(PAGE1)
+        LD      (PrevSavedPage1),A
+        CALL    CacheCopyPrevRectToCanvas
+        LD      A,(PrevSavedPage1)
+        OUT     (PAGE1),A
+        JP      CacheMarkCurrentFrameDirty
+
+CachePrepareCurrentFrameRectCopy:
+        XOR     A
+        LD      (CanvasOutputPage),A
+        LD      (CanvasOutputDoneFlag),A
+        LD      (CanvasTransparentFlag),A
+        LD      HL,CANVAS_WINDOW
+        LD      (CanvasOutputPtr),HL
+        CALL    CacheGetCurrentFrameEntryPtr
+        LD      DE,6
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameLeft),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameTop),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameWidth),DE
+        LD      A,D
+        OR      E
+        RET     Z
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (BlitRectRows),DE
+        LD      A,D
+        OR      E
+        RET     Z
+        CALL    CacheCanvasSeekFrameStart
+        RET     C
+        LD      A,(CanvasOutputPage)
+        LD      (PrevOutputPage),A
+        LD      HL,(CanvasOutputPtr)
+        LD      A,H
+        SUB     HIGH (LOAD_WINDOW - WORK_WINDOW)
+        LD      H,A
+        LD      (PrevOutputPtr),HL
+        LD      HL,GIF_MAX_WIDTH
+        LD      DE,(CanvasFrameWidth)
+        OR      A
+        SBC     HL,DE
+        LD      (BlitRowSkip),HL
+        LD      A,#01
+        OR      A
+        RET
+
+CacheCopyCanvasRectToPrev:
+        XOR     A
+        LD      (CacheCopyDirection),A
+        JP      CacheCopyCanvasPrevRows
+
+CacheCopyPrevRectToCanvas:
+        LD      A,#01
+        LD      (CacheCopyDirection),A
+        JP      CacheCopyCanvasPrevRows
+
+CacheCopyCanvasPrevRows:
+.row_loop:
+        LD      HL,(CanvasFrameWidth)
+        LD      (FillRectRemaining),HL
+.segment_loop:
+        LD      HL,(FillRectRemaining)
+        LD      A,H
+        OR      L
+        JR      Z,.row_done
+        LD      B,H
+        LD      C,L
+        CALL    CacheGetCanvasFillSegmentLength
+        PUSH    DE
+        CALL    CacheMapCanvasOutputPage
+        CALL    CacheMapPrevCanvasOutputPage
+        LD      A,(CacheCopyDirection)
+        OR      A
+        JR      NZ,.prev_to_canvas
+.canvas_to_prev:
+        LD      HL,(CanvasOutputPtr)
+        LD      DE,(PrevOutputPtr)
+        JR      .copy_segment
+.prev_to_canvas:
+        LD      HL,(PrevOutputPtr)
+        LD      DE,(CanvasOutputPtr)
+.copy_segment:
+        POP     BC
+        PUSH    BC
+        LDIR
+        POP     DE
+        PUSH    DE
+        CALL    CacheCanvasAdvanceOutputPtrByDE
+        POP     DE
+        RET     C
+        PUSH    DE
+        CALL    CachePrevAdvanceOutputPtrByDE
+        POP     DE
+        LD      HL,(FillRectRemaining)
+        OR      A
+        SBC     HL,DE
+        LD      (FillRectRemaining),HL
+        JR      .segment_loop
+.row_done:
+        LD      DE,(BlitRowSkip)
+        PUSH    DE
+        CALL    CacheCanvasAdvanceOutputPtrByDE
+        POP     DE
+        RET     C
+        CALL    CachePrevAdvanceOutputPtrByDE
+        LD      HL,(BlitRectRows)
+        DEC     HL
+        LD      (BlitRectRows),HL
+        LD      A,H
+        OR      L
+        JR      NZ,.row_loop
+        RET
+
+CachePrevAdvanceOutputPtrByDE:
+        LD      HL,(PrevOutputPtr)
+        ADD     HL,DE
+        JR      NC,.store_ptr
+        PUSH    HL
+        LD      A,(PrevOutputPage)
+        INC     A
+        LD      (PrevOutputPage),A
+        CP      PREV_CANVAS_MEMORY_PAGES
+        JR      C,.next_page
+        POP     HL
+        SCF
+        RET
+.next_page:
+        POP     HL
+        LD      DE,WORK_WINDOW
+        ADD     HL,DE
+.store_ptr:
+        LD      (PrevOutputPtr),HL
+        OR      A
+        RET
+
+CacheCopyDirection:
+        DB      #00
 
 CacheClearCurrentFrameRectToBackground:
         XOR     A

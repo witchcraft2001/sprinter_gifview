@@ -23,6 +23,7 @@ GIF_MAX_HEIGHT EQU #0100
 MAX_FRAME_INDEX EQU #0100
 FRAME_ENTRY_SIZE EQU 20
 CANVAS_MEMORY_PAGES EQU #05
+PREV_CANVAS_MEMORY_PAGES EQU CANVAS_MEMORY_PAGES
 LZW_WORKSPACE_PAGES EQU #04
 VIDEO_MODE_320_256 EQU #81
 VIDEO_PAGE_A EQU VPAGE_TILES
@@ -515,6 +516,10 @@ MapCanvasPageIndexToPage3:
         LD      HL,CanvasPageTable
         JR      MapPageTableIndexToPage3
 
+MapPrevCanvasPageIndexToPage1:
+        LD      HL,PrevCanvasPageTable
+        JR      MapPageTableIndexToPage1
+
 MapPageTableIndexToPage3:
         PUSH    DE
         LD      E,A
@@ -860,7 +865,9 @@ IndexCurrentFrame:
         JR      Z,.has_room
         LD      A,#01
         LD      (FrameIndexOverflow),A
-        RET
+        LD      HL,MsgTooManyFrames
+        CALL    PrintString
+        JP      ExitWithError
 .has_room:
         CALL    GetFrameEntryPtr
         LD      A,(FrameDataPage)
@@ -2101,6 +2108,7 @@ PrintFileInfo:
 
 AllocateWorkingMemory:
         CALL    AllocateCanvasMemory
+        CALL    AllocatePrevCanvasMemoryIfNeeded
         CALL    AllocateLzwWorkspaceMemory
         CALL    ClearWorkingMemory
         RET
@@ -2137,6 +2145,25 @@ AllocateLzwWorkspaceMemory:
         LD      (LzwMemoryAllocatedFlag),A
         RET
 
+AllocatePrevCanvasMemoryIfNeeded:
+        LD      A,(GifDisposal3Flag)
+        OR      A
+        RET     Z
+        LD      B,PREV_CANVAS_MEMORY_PAGES
+        LD      C,Dss.GetMem
+        RST     Dss.Rst
+        JR      NC,.ok
+        LD      HL,MsgNoMemory
+        CALL    PrintString
+        JP      ExitWithError
+.ok:
+        LD      (PrevCanvasMemoryBlockId),A
+        LD      HL,PrevCanvasPageTable
+        CALL    DumpMemoryPageTable
+        LD      A,#01
+        LD      (PrevCanvasMemoryAllocatedFlag),A
+        RET
+
 DumpMemoryPageTable:
         LD      C,Bios.Emm_Fn5
         RST     Bios.Rst
@@ -2151,12 +2178,21 @@ ClearWorkingMemory:
         LD      A,(CanvasMemoryBlockId)
         LD      C,CANVAS_MEMORY_PAGES
         CALL    ClearMemoryBlock
+        CALL    ClearPrevCanvasMemoryIfNeeded
         CALL    FillCanvasMemoryWithBackground
         LD      A,(LzwMemoryBlockId)
         LD      C,LZW_WORKSPACE_PAGES
         CALL    ClearMemoryBlock
         CALL    RestorePage3
         RET
+
+ClearPrevCanvasMemoryIfNeeded:
+        LD      A,(PrevCanvasMemoryAllocatedFlag)
+        OR      A
+        RET     Z
+        LD      A,(PrevCanvasMemoryBlockId)
+        LD      C,PREV_CANVAS_MEMORY_PAGES
+        JP      ClearMemoryBlock
 
 ClearMemoryBlock:
         LD      (ClearBlockId),A
@@ -2658,6 +2694,7 @@ PlayGifFrames:
         CALL    EnterCacheWindow
         CALL    ResetDirtyRect
 .loop:
+        CALL    CacheSaveCurrentFrameBackupForDisposal3
         CALL    CacheDecodeCurrentFrameToCanvas
         CALL    CacheMarkCurrentFrameDirty
         CALL    RestorePage1
@@ -2958,6 +2995,7 @@ CleanupResources:
         CALL    RestorePlaybackVideo
         CALL    CloseInputFile
         CALL    FreeLzwWorkspaceMemory
+        CALL    FreePrevCanvasMemory
         CALL    FreeCanvasMemory
         LD      A,(MemoryAllocatedFlag)
         OR      A
@@ -2976,6 +3014,17 @@ FreeCanvasMemory:
         XOR     A
         LD      (CanvasMemoryAllocatedFlag),A
         LD      A,(CanvasMemoryBlockId)
+        LD      C,Dss.FreeMem
+        RST     Dss.Rst
+        RET
+
+FreePrevCanvasMemory:
+        LD      A,(PrevCanvasMemoryAllocatedFlag)
+        OR      A
+        RET     Z
+        XOR     A
+        LD      (PrevCanvasMemoryAllocatedFlag),A
+        LD      A,(PrevCanvasMemoryBlockId)
         LD      C,Dss.FreeMem
         RST     Dss.Rst
         RET
@@ -3035,6 +3084,10 @@ MemoryAllocatedFlag:
 CanvasMemoryBlockId:
         DB      #00
 CanvasMemoryAllocatedFlag:
+        DB      #00
+PrevCanvasMemoryBlockId:
+        DB      #00
+PrevCanvasMemoryAllocatedFlag:
         DB      #00
 LzwMemoryBlockId:
         DB      #00
@@ -3104,6 +3157,12 @@ BlitRowSkip:
         DW      #0000
 FillRectRemaining:
         DW      #0000
+PrevOutputPage:
+        DB      #00
+PrevOutputPtr:
+        DW      #0000
+PrevSavedPage1:
+        DB      #00
 SavedPage1:
         DB      #FF
 SavedPage2:
@@ -3118,6 +3177,8 @@ GifPageTable:
         DS      #100,#00
 CanvasPageTable:
         DS      CANVAS_MEMORY_PAGES,#00
+PrevCanvasPageTable:
+        DS      PREV_CANVAS_MEMORY_PAGES,#00
 LzwPageTable:
         DS      LZW_WORKSPACE_PAGES,#00
 PagesNeeded:
@@ -3405,6 +3466,8 @@ MsgInvalidGifBlock:
         DB      "Error: invalid GIF block stream.",#0D,#0A,#00
 MsgFrameIndexOutOfRange:
         DB      "Error: frame index out of range.",#0D,#0A,#00
+MsgTooManyFrames:
+        DB      "Error: GIF has more than #0100 frames.",#0D,#0A,#00
 MsgUnsupportedLzwCodeSize:
         DB      "Error: unsupported GIF LZW code size.",#0D,#0A,#00
 MsgInvalidLzwStream:
