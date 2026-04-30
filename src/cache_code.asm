@@ -8,7 +8,7 @@ GifCacheEntry:
 
 CacheDecodeCurrentFrameToCanvas:
         CALL    LzwInitCodeReader
-        CALL    BeginCanvasOutput
+        CALL    CacheBeginCanvasOutput
         CALL    CacheLzwResetDictionary
         CALL    CacheLzwReadFirstDataCode
         RET     C
@@ -229,6 +229,82 @@ CacheIsCanvasComplete:
         LD      A,(CanvasOutputDoneFlag)
         OR      A
         RET
+
+CacheBeginCanvasOutput:
+        XOR     A
+        LD      (CanvasOutputPage),A
+        LD      (CanvasOutputDoneFlag),A
+        LD      HL,CANVAS_WINDOW
+        LD      (CanvasOutputPtr),HL
+        CALL    CacheGetCurrentFrameEntryPtr
+        LD      DE,6
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameLeft),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameTop),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameWidth),DE
+        LD      (CanvasFrameXRemaining),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameHeight),DE
+        LD      (CanvasRowsRemaining),DE
+        INC     HL
+        LD      A,(HL)
+        AND     #40
+        LD      (CanvasInterlaceFlag),A
+        XOR     A
+        LD      (CanvasCurrentRow),A
+        LD      (CanvasCurrentRow + 1),A
+        LD      (CanvasInterlacePass),A
+        INC     HL
+        INC     HL
+        LD      A,(HL)
+        AND     #01
+        LD      (CanvasTransparentFlag),A
+        INC     HL
+        LD      A,(HL)
+        LD      (CanvasTransparentIndex),A
+        CALL    CacheCanvasSeekFrameStart
+        JP      CacheMapCanvasOutputPage
+
+CacheGetCurrentFrameEntryPtr:
+        LD      HL,(CurrentPlaybackFrame)
+        LD      DE,(FrameIndexCount)
+        OR      A
+        SBC     HL,DE
+        JP      NC,CacheFrameIndexOutOfRange
+        LD      A,(CurrentPlaybackFrame + 1)
+        OR      A
+        JP      NZ,CacheFrameIndexOutOfRange
+        LD      A,(CurrentPlaybackFrame)
+        LD      L,A
+        LD      H,#00
+        ADD     HL,HL
+        ADD     HL,HL
+        LD      D,H
+        LD      E,L
+        ADD     HL,HL
+        ADD     HL,HL
+        ADD     HL,DE
+        LD      DE,FrameIndexTable
+        ADD     HL,DE
+        RET
+
+CacheFrameIndexOutOfRange:
+        CALL    RestoreSystemWindow
+        JP      FrameIndexOutOfRange
 
 CacheCompareHLDE:
         PUSH    HL
@@ -552,7 +628,7 @@ CacheCanvasAdvanceInterlacedRow:
         LD      (CanvasOutputPtr),HL
         LD      HL,(CanvasSeekTop)
         LD      (CanvasFrameTop),HL
-        CALL    CanvasSeekFrameStart
+        CALL    CacheCanvasSeekFrameStart
         LD      HL,(CanvasSeekTop)
         LD      DE,(CanvasCurrentRow)
         OR      A
@@ -610,10 +686,36 @@ CacheCanvasTryInterlaceStep:
 
 CacheCanvasStoreInterlaceRowIfValid:
         LD      DE,(CanvasFrameHeight)
-        CALL    CompareHLDE
+        CALL    CacheCompareHLDE
         RET     NC
         LD      (CanvasCurrentRow),HL
         SCF
+        RET
+
+CacheCanvasSeekFrameStart:
+        LD      HL,(CanvasFrameTop)
+        LD      A,H
+        OR      L
+        JR      Z,.left_offset
+.row_loop:
+        PUSH    HL
+        LD      DE,GIF_MAX_WIDTH
+        CALL    CacheCanvasAdvanceOutputPtrByDE
+        POP     HL
+        RET     C
+        DEC     HL
+        LD      A,H
+        OR      L
+        JR      NZ,.row_loop
+.left_offset:
+        LD      DE,(CanvasFrameLeft)
+        CALL    CacheCanvasAdvanceOutputPtrByDE
+        RET     C
+        LD      A,(CanvasOutputPage)
+        LD      (CanvasRowStartPage),A
+        LD      HL,(CanvasOutputPtr)
+        LD      (CanvasRowStartPtr),HL
+        OR      A
         RET
 
 CacheCanvasAdvanceOutputPtrByDE:
@@ -656,6 +758,215 @@ CacheMapCanvasOutputPage:
         LD      (Page3Owner),A
         LD      A,(CanvasOutputPage)
         LD      (Page3MappedPage),A
+        RET
+
+CacheMarkCurrentFrameDirty:
+        CALL    CacheGetCurrentFrameEntryPtr
+        LD      DE,6
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (DirtyInputLeft),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (DirtyInputTop),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        PUSH    HL
+        LD      HL,(DirtyInputLeft)
+        ADD     HL,DE
+        LD      (DirtyInputRight),HL
+        POP     HL
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      HL,(DirtyInputTop)
+        ADD     HL,DE
+        LD      (DirtyInputBottom),HL
+        JP      CacheMarkDirtyRectFromInput
+
+CacheMarkDirtyRectFromInput:
+        LD      A,(DirtyFlag)
+        OR      A
+        JR      NZ,.merge
+        LD      A,#01
+        LD      (DirtyFlag),A
+        LD      HL,(DirtyInputLeft)
+        LD      (DirtyLeft),HL
+        LD      HL,(DirtyInputTop)
+        LD      (DirtyTop),HL
+        LD      HL,(DirtyInputRight)
+        LD      (DirtyRight),HL
+        LD      HL,(DirtyInputBottom)
+        LD      (DirtyBottom),HL
+        RET
+.merge:
+        LD      HL,(DirtyInputLeft)
+        LD      DE,(DirtyLeft)
+        CALL    CacheCompareHLDE
+        JR      NC,.top
+        LD      (DirtyLeft),HL
+.top:
+        LD      HL,(DirtyInputTop)
+        LD      DE,(DirtyTop)
+        CALL    CacheCompareHLDE
+        JR      NC,.right
+        LD      (DirtyTop),HL
+.right:
+        LD      HL,(DirtyRight)
+        LD      DE,(DirtyInputRight)
+        CALL    CacheCompareHLDE
+        JR      NC,.bottom
+        LD      HL,(DirtyInputRight)
+        LD      (DirtyRight),HL
+.bottom:
+        LD      HL,(DirtyBottom)
+        LD      DE,(DirtyInputBottom)
+        CALL    CacheCompareHLDE
+        RET     NC
+        LD      HL,(DirtyInputBottom)
+        LD      (DirtyBottom),HL
+        RET
+
+CacheApplyCurrentFrameDisposal:
+        CALL    CacheGetCurrentFrameEntryPtr
+        LD      DE,16
+        ADD     HL,DE
+        LD      A,(HL)
+        AND     #1C
+        CP      #08
+        RET     NZ
+        JP      CacheClearCurrentFrameRectToBackground
+
+CacheClearCurrentFrameRectToBackground:
+        XOR     A
+        LD      (CanvasOutputPage),A
+        LD      (CanvasOutputDoneFlag),A
+        LD      (CanvasTransparentFlag),A
+        LD      HL,CANVAS_WINDOW
+        LD      (CanvasOutputPtr),HL
+        CALL    CacheGetCurrentFrameEntryPtr
+        LD      DE,6
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameLeft),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameTop),DE
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasFrameWidth),DE
+        LD      (CanvasFrameXRemaining),DE
+        LD      A,D
+        OR      E
+        RET     Z
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (CanvasRowsRemaining),DE
+        LD      (BlitRectRows),DE
+        LD      A,D
+        OR      E
+        RET     Z
+        CALL    CacheCanvasSeekFrameStart
+        CALL    CacheMapCanvasOutputPage
+        LD      HL,GIF_MAX_WIDTH
+        LD      DE,(CanvasFrameWidth)
+        OR      A
+        SBC     HL,DE
+        LD      (BlitRowSkip),HL
+.row_loop:
+        CALL    CacheFillCanvasRowWithBackgroundAcc
+        JP      C,LzwCanvasOverflow
+        LD      DE,(BlitRowSkip)
+        CALL    CacheCanvasAdvanceOutputPtrByDE
+        JP      C,LzwCanvasOverflow
+        LD      HL,(BlitRectRows)
+        DEC     HL
+        LD      (BlitRectRows),HL
+        LD      A,H
+        OR      L
+        JR      NZ,.row_loop
+        JP      CacheMarkCurrentFrameDirty
+
+CacheFillCanvasRowWithBackgroundAcc:
+        LD      HL,(CanvasFrameWidth)
+        LD      (FillRectRemaining),HL
+.segment_loop:
+        LD      HL,(FillRectRemaining)
+        LD      A,H
+        OR      L
+        RET     Z
+        LD      B,H
+        LD      C,L
+        CALL    CacheGetCanvasFillSegmentLength
+        PUSH    DE
+        CALL    CacheMapCanvasOutputPage
+        LD      HL,(CanvasOutputPtr)
+        LD      A,(GifBackgroundColor)
+        CALL    CacheAccFillMemorySegmentNoEi
+        POP     DE
+        PUSH    DE
+        CALL    CacheCanvasAdvanceOutputPtrByDE
+        POP     DE
+        RET     C
+        LD      HL,(FillRectRemaining)
+        OR      A
+        SBC     HL,DE
+        LD      (FillRectRemaining),HL
+        JR      .segment_loop
+
+CacheGetCanvasFillSegmentLength:
+        LD      A,B
+        OR      A
+        JR      NZ,.max_len
+        LD      A,C
+        CP      #00
+        JR      NZ,.base_len
+.max_len:
+        LD      A,#FF
+.base_len:
+        LD      E,A
+        LD      HL,(CanvasOutputPtr)
+        LD      A,H
+        CP      #FF
+        JR      NZ,.done
+        LD      A,L
+        OR      A
+        JR      Z,.done
+        CPL
+        INC     A
+        CP      E
+        JR      NC,.done
+        LD      E,A
+.done:
+        LD      D,#00
+        RET
+
+CacheAccFillMemorySegmentNoEi:
+        LD      C,A
+        LD      A,E
+        LD      (.length + 1),A
+        DI
+        LD      D,D
+.length:
+        LD      A,#00
+        LD      C,C
+        LD      (HL),C
+        LD      B,B
         RET
 
 CacheBlitDirtyCanvasRowToVideo:

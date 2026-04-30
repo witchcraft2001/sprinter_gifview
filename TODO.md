@@ -18,8 +18,9 @@
 - Continue moving hot decode/render routines into cache. Current cache block
   contains the main LZW decode loop, dictionary expand/add/pop routines,
   GIF sub-block stream byte reader, per-pixel canvas output and dirty-row video
-  blit. Next candidates are low-level page table mapping and fill/disposal
-  helpers after their accelerator path is defined.
+  blit, frame canvas setup, dirty-rect marking, and disposal method 2
+  accelerator fills. Next candidates are low-level page table mapping and
+  deeper LZW inner-loop optimizations.
 - Replace CPU `LDIR`/byte loops in dirty-rect blits and canvas fills with
   Sprinter accelerator commands. Prefer preparing rectangular blocks so that
   `LD A,A`/vertical copy can move screen columns or strips in a tight loop;

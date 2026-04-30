@@ -2659,7 +2659,7 @@ PlayGifFrames:
         CALL    ResetDirtyRect
 .loop:
         CALL    CacheDecodeCurrentFrameToCanvas
-        CALL    MarkCurrentFrameDirty
+        CALL    CacheMarkCurrentFrameDirty
         CALL    RestorePage1
         CALL    RestorePage2
         CALL    RestorePage3
@@ -2675,7 +2675,7 @@ PlayGifFrames:
         CALL    WaitFrameDelayOrKey
         JR      C,.done
         CALL    EnterCacheWindow
-        CALL    ApplyCurrentFrameDisposal
+        CALL    CacheApplyCurrentFrameDisposal
         CALL    AdvancePlaybackFrame
         JR      C,.done_cache
         JR      .loop
