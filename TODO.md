@@ -17,7 +17,7 @@
   It now allocates a backup canvas only when such frames are present, saves the
   frame rectangle before decode, and restores it after the frame delay.
 - Continue moving hot decode/render routines into cache. Current cache block
-  contains the main LZW decode loop, dictionary expand/add/pop routines,
+  contains LZW initialization, the main LZW decode loop, dictionary expand/add/pop routines,
   GIF sub-block stream byte reader, per-pixel canvas output and dirty-row video
   blit, frame canvas setup, dirty-rect marking, and disposal method 2
   accelerator fills. Low-level canvas page mapping used by the cache path now
@@ -40,11 +40,12 @@
 - Revisit the experimental `CacheLzwReadCodeFast` bit-buffer reader only after
   adding diagnostics that compare emitted LZW code sequences against the stable
   bit-by-bit reader; the previous 24-bit version was faster but unstable.
-- Reduce call overhead in `CacheLzwOutputCodeString` by inlining the small stack
-  push/pop helpers or keeping stack pointer state in registers across the inner
-  loop where possible.
+- Continue reducing call overhead in `CacheLzwOutputCodeString`. The stack
+  reset/push/pop helpers are now inlined; a future pass can keep stack pointer
+  state in registers across more of the inner loop.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.
-- Consider table-driven bit masks/powers for LZW code sizes 3..12 instead of
-  recomputing masks with shifts.
+- Verify table-driven LZW powers and code masks on real-world samples; the
+  cache path now uses lookup tables instead of recomputing powers or deriving
+  masks at runtime.

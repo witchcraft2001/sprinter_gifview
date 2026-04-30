@@ -7,7 +7,7 @@ GifCacheEntry:
         RET
 
 CacheDecodeCurrentFrameToCanvas:
-        CALL    LzwInitCodeReader
+        CALL    CacheLzwInitCodeReader
         CALL    CacheBeginCanvasOutput
         CALL    CacheLzwResetDictionary
         CALL    CacheLzwReadFirstDataCode
@@ -76,6 +76,64 @@ CacheLzwResetDictionary:
         CALL    CacheLzwSetCodeMask
         RET
 
+CacheLzwInitCodeReader:
+        CALL    CacheMapLzwWorkspace
+        CALL    CacheBeginFrameDataStream
+        CALL    CacheGetCurrentFrameEntryPtr
+        LD      DE,15
+        ADD     HL,DE
+        LD      A,(HL)
+        CP      #02
+        JP      C,CacheLzwUnsupportedCodeSize
+        CP      #09
+        JP      NC,CacheLzwUnsupportedCodeSize
+        LD      (LzwMinCodeSize),A
+        INC     A
+        LD      (LzwCodeSize),A
+        XOR     A
+        LD      (LzwCurrentByte),A
+        LD      (LzwBitsRemaining),A
+        LD      (LzwBitCount),A
+        LD      (LzwBitBuffer),A
+        LD      (LzwBitBuffer + 1),A
+        LD      (LzwBitBufferHigh),A
+        LD      A,(LzwMinCodeSize)
+        CALL    CacheLzwPowerOfTwo
+        LD      (LzwClearCode),HL
+        INC     HL
+        LD      (LzwEndCode),HL
+        INC     HL
+        LD      (LzwNextCode),HL
+        RET
+
+CacheMapLzwWorkspace:
+        IN      A,(PAGE1)
+        LD      (SavedPage1),A
+        XOR     A
+        LD      HL,LzwPageTable
+        JP      CacheMapPageTableIndexToPage1
+
+CacheBeginFrameDataStream:
+        IN      A,(PAGE3)
+        LD      (SavedPage3),A
+        CALL    CacheGetCurrentFrameEntryPtr
+        LD      A,(HL)
+        LD      (FrameStreamPage),A
+        INC     HL
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        LD      (FrameStreamPtr),DE
+        XOR     A
+        LD      (FrameStreamSubBlockRemaining),A
+        LD      (FrameStreamDoneFlag),A
+        CALL    CacheFrameStreamMapCurrentPage
+        RET
+
+CacheLzwUnsupportedCodeSize:
+        CALL    RestoreSystemWindow
+        JP      LzwUnsupportedCodeSize
+
 CacheLzwReadFirstDataCode:
         CALL    CacheLzwReadCode
         RET     C
@@ -98,15 +156,21 @@ CacheLzwReadFirstDataCode:
 
 CacheLzwOutputCodeString:
         PUSH    HL
-        CALL    CacheLzwResetStack
+        LD      HL,LZW_STACK_BASE
+        LD      (LzwStackPtr),HL
         POP     HL
         CALL    CacheLzwExpandCodeToStack
         LD      (LzwFirstChar),A
         CALL    CacheCanvasPutPixel
         JP      C,LzwCanvasOverflow
 .pop_loop:
-        CALL    CacheLzwPopStack
-        RET     C
+        LD      HL,(LzwStackPtr)
+        LD      DE,LZW_STACK_BASE
+        CALL    CacheCompareHLDE
+        RET     Z
+        DEC     HL
+        LD      (LzwStackPtr),HL
+        LD      A,(HL)
         CALL    CacheCanvasPutPixel
         JP      C,LzwCanvasOverflow
         JR      .pop_loop
@@ -118,7 +182,14 @@ CacheLzwExpandCodeToStack:
         PUSH    HL
         CALL    CacheLzwGetSuffixPtr
         LD      A,(HL)
-        CALL    CacheLzwPushStack
+        LD      C,A
+        LD      HL,(LzwStackPtr)
+        LD      A,H
+        CP      HIGH #8000
+        JP      NC,LzwInvalidStream
+        LD      (HL),C
+        INC     HL
+        LD      (LzwStackPtr),HL
         POP     HL
         CALL    CacheLzwReadPrefix
         JR      CacheLzwExpandCodeToStack
@@ -177,53 +248,42 @@ CacheLzwGetSuffixPtr:
         ADD     HL,DE
         RET
 
-CacheLzwResetStack:
-        LD      HL,LZW_STACK_BASE
-        LD      (LzwStackPtr),HL
-        RET
-
-CacheLzwPushStack:
-        LD      (LzwStackByte),A
-        LD      HL,(LzwStackPtr)
-        LD      A,H
-        CP      HIGH #8000
-        JP      NC,LzwInvalidStream
-        LD      A,(LzwStackByte)
-        LD      (HL),A
-        INC     HL
-        LD      (LzwStackPtr),HL
-        RET
-
-CacheLzwPopStack:
-        LD      HL,(LzwStackPtr)
-        LD      DE,LZW_STACK_BASE
-        CALL    CacheCompareHLDE
-        JR      NZ,.has_data
-        SCF
-        RET
-.has_data:
-        DEC     HL
-        LD      (LzwStackPtr),HL
-        LD      A,(HL)
-        OR      A
-        RET
-
 CacheLzwPowerOfTwo:
-        LD      B,A
-        LD      HL,#0001
-.loop:
-        LD      A,B
-        OR      A
-        RET     Z
-        ADD     HL,HL
-        DJNZ    .loop
+        ADD     A,A
+        LD      E,A
+        LD      D,#00
+        LD      HL,CacheLzwPowerOfTwoTable
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        EX      DE,HL
         RET
+
+CacheLzwPowerOfTwoTable:
+        DW      #0001,#0002,#0004,#0008
+        DW      #0010,#0020,#0040,#0080
+        DW      #0100,#0200,#0400,#0800
+        DW      #1000
 
 CacheLzwSetCodeMask:
-        CALL    CacheLzwPowerOfTwo
-        DEC     HL
+        ADD     A,A
+        LD      E,A
+        LD      D,#00
+        LD      HL,CacheLzwCodeMaskTable
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        EX      DE,HL
         LD      (LzwCodeMask),HL
         RET
+
+CacheLzwCodeMaskTable:
+        DW      #0000,#0001,#0003,#0007
+        DW      #000F,#001F,#003F,#007F
+        DW      #00FF,#01FF,#03FF,#07FF
+        DW      #0FFF
 
 CacheIsCanvasComplete:
         LD      A,(CanvasOutputDoneFlag)
