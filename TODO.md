@@ -42,7 +42,9 @@
   bit-by-bit reader; the previous 24-bit version was faster but unstable.
 - Continue reducing call overhead in `CacheLzwOutputCodeString`. The stack
   reset/push/pop helpers are now inlined; a future pass can keep stack pointer
-  state in registers across more of the inner loop.
+  state in registers across more of the inner loop. Common LZW code comparisons
+  in the decode loop are now inlined with byte compares instead of
+  `CacheCompareHLDE` calls.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.

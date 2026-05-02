@@ -20,14 +20,29 @@ CacheDecodeCurrentFrameToCanvas:
         CALL    CacheLzwReadCode
         RET     C
         LD      DE,(LzwClearCode)
-        CALL    CacheCompareHLDE
+        LD      A,H
+        CP      D
+        JR      NZ,.not_clear_code
+        LD      A,L
+        CP      E
         JR      Z,.clear_code
+.not_clear_code:
         LD      DE,(LzwEndCode)
-        CALL    CacheCompareHLDE
+        LD      A,H
+        CP      D
+        JR      NZ,.not_end_code
+        LD      A,L
+        CP      E
         RET     Z
+.not_end_code:
         LD      (LzwInCode),HL
         LD      DE,(LzwNextCode)
-        CALL    CacheCompareHLDE
+        LD      A,H
+        CP      D
+        JR      NZ,.next_code_compared
+        LD      A,L
+        CP      E
+.next_code_compared:
         JR      C,.known_code
         JR      Z,.next_code
         JP      LzwInvalidStream
@@ -138,13 +153,28 @@ CacheLzwReadFirstDataCode:
         CALL    CacheLzwReadCode
         RET     C
         LD      DE,(LzwClearCode)
-        CALL    CacheCompareHLDE
+        LD      A,H
+        CP      D
+        JR      NZ,.not_clear_code
+        LD      A,L
+        CP      E
         JR      Z,CacheLzwReadFirstDataCode
+.not_clear_code:
         LD      DE,(LzwEndCode)
-        CALL    CacheCompareHLDE
+        LD      A,H
+        CP      D
+        JR      NZ,.not_end_code
+        LD      A,L
+        CP      E
         JR      Z,.end_code
+.not_end_code:
         LD      DE,(LzwClearCode)
-        CALL    CacheCompareHLDE
+        LD      A,H
+        CP      D
+        JR      NZ,.clear_code_compared
+        LD      A,L
+        CP      E
+.clear_code_compared:
         JR      C,.valid_code
         JP      LzwInvalidStream
 .valid_code:
@@ -165,9 +195,13 @@ CacheLzwOutputCodeString:
         JP      C,LzwCanvasOverflow
 .pop_loop:
         LD      HL,(LzwStackPtr)
-        LD      DE,LZW_STACK_BASE
-        CALL    CacheCompareHLDE
+        LD      A,H
+        CP      HIGH LZW_STACK_BASE
+        JR      NZ,.has_stack_data
+        LD      A,L
+        CP      LOW LZW_STACK_BASE
         RET     Z
+.has_stack_data:
         DEC     HL
         LD      (LzwStackPtr),HL
         LD      A,(HL)
@@ -177,7 +211,12 @@ CacheLzwOutputCodeString:
 
 CacheLzwExpandCodeToStack:
         LD      DE,(LzwClearCode)
-        CALL    CacheCompareHLDE
+        LD      A,H
+        CP      D
+        JR      NZ,.clear_code_compared
+        LD      A,L
+        CP      E
+.clear_code_compared:
         JR      C,.literal
         PUSH    HL
         CALL    CacheLzwGetSuffixPtr
@@ -199,8 +238,8 @@ CacheLzwExpandCodeToStack:
 
 CacheLzwAddDictionaryEntry:
         LD      HL,(LzwNextCode)
-        LD      DE,#1000
-        CALL    CacheCompareHLDE
+        LD      A,H
+        CP      #10
         RET     NC
         LD      HL,(LzwNextCode)
         CALL    CacheLzwGetPrefixPtr
@@ -220,8 +259,11 @@ CacheLzwAddDictionaryEntry:
         RET     NC
         CALL    CacheLzwPowerOfTwo
         LD      DE,(LzwNextCode)
-        EX      DE,HL
-        CALL    CacheCompareHLDE
+        LD      A,D
+        CP      H
+        RET     NZ
+        LD      A,E
+        CP      L
         RET     NZ
         LD      A,(LzwCodeSize)
         INC     A
