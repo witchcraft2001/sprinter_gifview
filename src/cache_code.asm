@@ -219,7 +219,8 @@ CacheLzwExpandCodeToStack:
 .clear_code_compared:
         JR      C,.literal
         PUSH    HL
-        CALL    CacheLzwGetSuffixPtr
+        LD      DE,LZW_SUFFIX_BASE
+        ADD     HL,DE
         LD      A,(HL)
         LD      C,A
         LD      HL,(LzwStackPtr)
@@ -230,7 +231,13 @@ CacheLzwExpandCodeToStack:
         INC     HL
         LD      (LzwStackPtr),HL
         POP     HL
-        CALL    CacheLzwReadPrefix
+        ADD     HL,HL
+        LD      DE,LZW_PREFIX_BASE
+        ADD     HL,DE
+        LD      E,(HL)
+        INC     HL
+        LD      D,(HL)
+        EX      DE,HL
         JR      CacheLzwExpandCodeToStack
 .literal:
         LD      A,L
@@ -242,13 +249,16 @@ CacheLzwAddDictionaryEntry:
         CP      #10
         RET     NC
         LD      HL,(LzwNextCode)
-        CALL    CacheLzwGetPrefixPtr
+        ADD     HL,HL
+        LD      DE,LZW_PREFIX_BASE
+        ADD     HL,DE
         LD      DE,(LzwOldCode)
         LD      (HL),E
         INC     HL
         LD      (HL),D
         LD      HL,(LzwNextCode)
-        CALL    CacheLzwGetSuffixPtr
+        LD      DE,LZW_SUFFIX_BASE
+        ADD     HL,DE
         LD      A,(LzwFirstChar)
         LD      (HL),A
         LD      HL,(LzwNextCode)
@@ -269,25 +279,6 @@ CacheLzwAddDictionaryEntry:
         INC     A
         LD      (LzwCodeSize),A
         CALL    CacheLzwSetCodeMask
-        RET
-
-CacheLzwReadPrefix:
-        CALL    CacheLzwGetPrefixPtr
-        LD      E,(HL)
-        INC     HL
-        LD      D,(HL)
-        EX      DE,HL
-        RET
-
-CacheLzwGetPrefixPtr:
-        ADD     HL,HL
-        LD      DE,LZW_PREFIX_BASE
-        ADD     HL,DE
-        RET
-
-CacheLzwGetSuffixPtr:
-        LD      DE,LZW_SUFFIX_BASE
-        ADD     HL,DE
         RET
 
 CacheLzwPowerOfTwo:
