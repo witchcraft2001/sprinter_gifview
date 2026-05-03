@@ -54,6 +54,10 @@
   for decoded pixels is now done once per LZW output string and on rare
   page/row changes instead of inside every pixel writer call. Canvas completion
   checks in the cache decode loop are now inlined instead of calling a helper.
+  LZW dictionary growth in the cache path now tracks `LzwNextCodeLimit`, so
+  each dictionary add compares against a cached threshold instead of calling
+  `CacheLzwPowerOfTwo`. Dictionary reset now derives that threshold directly
+  from `LzwClearCode`, avoiding another table lookup on clear codes.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.

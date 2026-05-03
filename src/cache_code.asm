@@ -85,11 +85,14 @@ CacheDecodeCurrentFrameToCanvas:
 
 CacheLzwResetDictionary:
         LD      HL,(LzwClearCode)
-        LD      (LzwNextCode),HL
-        LD      HL,(LzwNextCode)
+        LD      D,H
+        LD      E,L
         INC     HL
         INC     HL
         LD      (LzwNextCode),HL
+        EX      DE,HL
+        ADD     HL,HL
+        LD      (LzwNextCodeLimit),HL
         LD      A,(LzwMinCodeSize)
         INC     A
         LD      (LzwCodeSize),A
@@ -267,17 +270,19 @@ CacheLzwAddDictionaryEntry:
         LD      A,(LzwCodeSize)
         CP      #0C
         RET     NC
-        CALL    CacheLzwPowerOfTwo
-        LD      DE,(LzwNextCode)
-        LD      A,D
-        CP      H
+        LD      DE,(LzwNextCodeLimit)
+        LD      A,H
+        CP      D
         RET     NZ
-        LD      A,E
-        CP      L
+        LD      A,L
+        CP      E
         RET     NZ
         LD      A,(LzwCodeSize)
         INC     A
         LD      (LzwCodeSize),A
+        LD      HL,(LzwNextCodeLimit)
+        ADD     HL,HL
+        LD      (LzwNextCodeLimit),HL
         CALL    CacheLzwSetCodeMask
         RET
 

@@ -3295,6 +3295,8 @@ LzwEndCode:
         DW      #0000
 LzwNextCode:
         DW      #0000
+LzwNextCodeLimit:
+        DW      #0000
 LzwOldCode:
         DW      #0000
 LzwInCode:
