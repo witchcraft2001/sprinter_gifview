@@ -700,31 +700,27 @@ CacheCanvasPutPixel:
         RET
 
 CacheCanvasPutPixelTransparent:
-        LD      (CanvasOutputByte),A
+        LD      C,A
         LD      A,(CanvasOutputDoneFlag)
         OR      A
         JR      Z,.not_done
         OR      A
         RET
 .not_done:
-        LD      A,(CanvasOutputByte)
+        LD      A,C
         LD      HL,CanvasTransparentIndex
         CP      (HL)
         JR      Z,.advance_pixel
 .write_pixel:
         CALL    CacheMapCanvasOutputPage
         LD      HL,(CanvasOutputPtr)
-        LD      A,(CanvasOutputByte)
-        LD      (HL),A
+        LD      (HL),C
 .advance_pixel:
         CALL    CacheCanvasAdvancePixel
-        RET     C
-        LD      A,(CanvasOutputByte)
-        OR      A
         RET
 
 CacheCanvasPutPixelOpaque:
-        LD      (CanvasOutputByte),A
+        LD      C,A
         LD      A,(CanvasOutputDoneFlag)
         OR      A
         JR      Z,.not_done
@@ -733,12 +729,8 @@ CacheCanvasPutPixelOpaque:
 .not_done:
         CALL    CacheMapCanvasOutputPage
         LD      HL,(CanvasOutputPtr)
-        LD      A,(CanvasOutputByte)
-        LD      (HL),A
+        LD      (HL),C
         CALL    CacheCanvasAdvancePixel
-        RET     C
-        LD      A,(CanvasOutputByte)
-        OR      A
         RET
 
 CacheCanvasAdvancePixel:

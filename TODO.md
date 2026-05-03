@@ -46,7 +46,9 @@
   cache LZW string stack pointer now stays in `IX`, avoiding `LzwStackPtr`
   memory reads/writes in the hot expand/pop loop. For opaque frames,
   cache-local pixel output calls are patched to a no-transparency writer at
-  frame start, skipping the per-pixel transparency-flag branch.
+  frame start, skipping the per-pixel transparency-flag branch. Cache-local
+  transparent/opaque pixel writers now keep the current pixel in `C` instead of
+  round-tripping it through `CanvasOutputByte`.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.
