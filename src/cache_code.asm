@@ -734,9 +734,24 @@ CacheCanvasPutPixelOpaque:
         RET
 
 CacheCanvasAdvancePixel:
-        LD      DE,#0001
-        CALL    CacheCanvasAdvanceOutputPtrByDE
-        RET     C
+        LD      HL,(CanvasOutputPtr)
+        INC     HL
+        LD      A,H
+        OR      L
+        JR      NZ,.store_advanced_ptr
+        LD      A,(CanvasOutputPage)
+        INC     A
+        LD      (CanvasOutputPage),A
+        CP      CANVAS_MEMORY_PAGES
+        JR      C,.next_canvas_page
+        LD      A,#01
+        LD      (CanvasOutputDoneFlag),A
+        SCF
+        RET
+.next_canvas_page:
+        LD      HL,LOAD_WINDOW
+.store_advanced_ptr:
+        LD      (CanvasOutputPtr),HL
         LD      HL,(CanvasFrameXRemaining)
         DEC     HL
         LD      (CanvasFrameXRemaining),HL

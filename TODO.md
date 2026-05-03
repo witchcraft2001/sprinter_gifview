@@ -48,7 +48,9 @@
   cache-local pixel output calls are patched to a no-transparency writer at
   frame start, skipping the per-pixel transparency-flag branch. Cache-local
   transparent/opaque pixel writers now keep the current pixel in `C` instead of
-  round-tripping it through `CanvasOutputByte`.
+  round-tripping it through `CanvasOutputByte`. `CacheCanvasAdvancePixel` now
+  has a specialized `+1` pointer advance path, so per-pixel output no longer
+  calls the generic `CacheCanvasAdvanceOutputPtrByDE` helper.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.
