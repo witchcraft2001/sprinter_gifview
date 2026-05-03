@@ -14,7 +14,8 @@ CacheDecodeCurrentFrameToCanvas:
         RET     C
         LD      (LzwOldCode),HL
         CALL    CacheLzwOutputCodeString
-        CALL    CacheIsCanvasComplete
+        LD      A,(CanvasOutputDoneFlag)
+        OR      A
         RET     NZ
 .loop:
         CALL    CacheLzwReadCode
@@ -48,7 +49,8 @@ CacheDecodeCurrentFrameToCanvas:
         JP      LzwInvalidStream
 .known_code:
         CALL    CacheLzwOutputCodeString
-        CALL    CacheIsCanvasComplete
+        LD      A,(CanvasOutputDoneFlag)
+        OR      A
         RET     NZ
         CALL    CacheLzwAddDictionaryEntry
         LD      HL,(LzwInCode)
@@ -57,12 +59,14 @@ CacheDecodeCurrentFrameToCanvas:
 .next_code:
         LD      HL,(LzwOldCode)
         CALL    CacheLzwOutputCodeString
-        CALL    CacheIsCanvasComplete
+        LD      A,(CanvasOutputDoneFlag)
+        OR      A
         RET     NZ
         LD      A,(LzwFirstChar)
         CALL    CacheCanvasPutPixelTransparent
         JP      C,LzwCanvasOverflow
-        CALL    CacheIsCanvasComplete
+        LD      A,(CanvasOutputDoneFlag)
+        OR      A
         RET     NZ
         CALL    CacheLzwAddDictionaryEntry
         LD      HL,(LzwInCode)
@@ -74,7 +78,8 @@ CacheDecodeCurrentFrameToCanvas:
         RET     C
         LD      (LzwOldCode),HL
         CALL    CacheLzwOutputCodeString
-        CALL    CacheIsCanvasComplete
+        LD      A,(CanvasOutputDoneFlag)
+        OR      A
         RET     NZ
         JR      .loop
 
@@ -313,11 +318,6 @@ CacheLzwCodeMaskTable:
         DW      #00FF,#01FF,#03FF,#07FF
         DW      #0FFF
 
-CacheIsCanvasComplete:
-        LD      A,(CanvasOutputDoneFlag)
-        OR      A
-        RET
-
 CacheBeginCanvasOutput:
         XOR     A
         LD      (CanvasOutputPage),A
@@ -375,7 +375,7 @@ CacheSelectCanvasPutPixel:
         JR      Z,.patch_calls
         LD      DE,CacheCanvasPutPixelTransparent
 .patch_calls:
-        LD      HL,CacheDecodeCurrentFrameToCanvas.next_code + 14
+        LD      HL,CacheDecodeCurrentFrameToCanvas.next_code + 15
         LD      (HL),E
         INC     HL
         LD      (HL),D

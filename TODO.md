@@ -52,7 +52,8 @@
   has a specialized `+1` pointer advance path, so per-pixel output no longer
   calls the generic `CacheCanvasAdvanceOutputPtrByDE` helper. Canvas page remap
   for decoded pixels is now done once per LZW output string and on rare
-  page/row changes instead of inside every pixel writer call.
+  page/row changes instead of inside every pixel writer call. Canvas completion
+  checks in the cache decode loop are now inlined instead of calling a helper.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.
