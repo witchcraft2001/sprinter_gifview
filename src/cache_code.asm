@@ -188,6 +188,8 @@ CacheLzwOutputCodeString:
         LD      IX,LZW_STACK_BASE
         CALL    CacheLzwExpandCodeToStack
         LD      (LzwFirstChar),A
+        CALL    CacheMapCanvasOutputPage
+        LD      A,(LzwFirstChar)
         CALL    CacheCanvasPutPixelTransparent
         JP      C,LzwCanvasOverflow
 .pop_loop:
@@ -377,7 +379,7 @@ CacheSelectCanvasPutPixel:
         LD      (HL),E
         INC     HL
         LD      (HL),D
-        LD      HL,CacheLzwOutputCodeString + 11
+        LD      HL,CacheLzwOutputCodeString + 17
         LD      (HL),E
         INC     HL
         LD      (HL),D
@@ -712,7 +714,6 @@ CacheCanvasPutPixelTransparent:
         CP      (HL)
         JR      Z,.advance_pixel
 .write_pixel:
-        CALL    CacheMapCanvasOutputPage
         LD      HL,(CanvasOutputPtr)
         LD      (HL),C
 .advance_pixel:
@@ -727,7 +728,6 @@ CacheCanvasPutPixelOpaque:
         OR      A
         RET
 .not_done:
-        CALL    CacheMapCanvasOutputPage
         LD      HL,(CanvasOutputPtr)
         LD      (HL),C
         CALL    CacheCanvasAdvancePixel
@@ -749,6 +749,7 @@ CacheCanvasAdvancePixel:
         SCF
         RET
 .next_canvas_page:
+        CALL    CacheMapCanvasOutputPage
         LD      HL,LOAD_WINDOW
 .store_advanced_ptr:
         LD      (CanvasOutputPtr),HL
@@ -779,6 +780,7 @@ CacheCanvasAdvancePixel:
         LD      DE,GIF_MAX_WIDTH
         CALL    CacheCanvasAdvanceOutputPtrByDE
         RET     C
+        CALL    CacheMapCanvasOutputPage
         LD      A,(CanvasOutputPage)
         LD      (CanvasRowStartPage),A
         LD      HL,(CanvasOutputPtr)
@@ -801,6 +803,7 @@ CacheCanvasAdvanceInterlacedRow:
         LD      HL,(CanvasSeekTop)
         LD      (CanvasFrameTop),HL
         CALL    CacheCanvasSeekFrameStart
+        CALL    CacheMapCanvasOutputPage
         LD      HL,(CanvasSeekTop)
         LD      DE,(CanvasCurrentRow)
         OR      A

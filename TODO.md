@@ -50,7 +50,9 @@
   transparent/opaque pixel writers now keep the current pixel in `C` instead of
   round-tripping it through `CanvasOutputByte`. `CacheCanvasAdvancePixel` now
   has a specialized `+1` pointer advance path, so per-pixel output no longer
-  calls the generic `CacheCanvasAdvanceOutputPtrByDE` helper.
+  calls the generic `CacheCanvasAdvanceOutputPtrByDE` helper. Canvas page remap
+  for decoded pixels is now done once per LZW output string and on rare
+  page/row changes instead of inside every pixel writer call.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.
