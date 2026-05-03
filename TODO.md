@@ -42,9 +42,11 @@
   bit-by-bit reader; the previous 24-bit version was faster but unstable.
 - Continue reducing call overhead in `CacheLzwOutputCodeString`. The stack
   reset/push/pop helpers, common LZW code comparisons, and dictionary
-  prefix/suffix table address helpers are now inlined in the cache path; a
-  future pass can keep stack pointer state in registers across more of the
-  inner loop.
+  prefix/suffix table address helpers are now inlined in the cache path. The
+  cache LZW string stack pointer now stays in `IX`, avoiding `LzwStackPtr`
+  memory reads/writes in the hot expand/pop loop. For opaque frames,
+  cache-local pixel output calls are patched to a no-transparency writer at
+  frame start, skipping the per-pixel transparency-flag branch.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.

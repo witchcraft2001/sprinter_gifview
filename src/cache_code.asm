@@ -60,7 +60,7 @@ CacheDecodeCurrentFrameToCanvas:
         CALL    CacheIsCanvasComplete
         RET     NZ
         LD      A,(LzwFirstChar)
-        CALL    CacheCanvasPutPixel
+        CALL    CacheCanvasPutPixelTransparent
         JP      C,LzwCanvasOverflow
         CALL    CacheIsCanvasComplete
         RET     NZ
@@ -185,27 +185,22 @@ CacheLzwReadFirstDataCode:
         RET
 
 CacheLzwOutputCodeString:
-        PUSH    HL
-        LD      HL,LZW_STACK_BASE
-        LD      (LzwStackPtr),HL
-        POP     HL
+        LD      IX,LZW_STACK_BASE
         CALL    CacheLzwExpandCodeToStack
         LD      (LzwFirstChar),A
-        CALL    CacheCanvasPutPixel
+        CALL    CacheCanvasPutPixelTransparent
         JP      C,LzwCanvasOverflow
 .pop_loop:
-        LD      HL,(LzwStackPtr)
-        LD      A,H
+        LD      A,IXH
         CP      HIGH LZW_STACK_BASE
         JR      NZ,.has_stack_data
-        LD      A,L
+        LD      A,IXL
         CP      LOW LZW_STACK_BASE
         RET     Z
 .has_stack_data:
-        DEC     HL
-        LD      (LzwStackPtr),HL
-        LD      A,(HL)
-        CALL    CacheCanvasPutPixel
+        DEC     IX
+        LD      A,(IX + 0)
+        CALL    CacheCanvasPutPixelTransparent
         JP      C,LzwCanvasOverflow
         JR      .pop_loop
 
@@ -223,13 +218,11 @@ CacheLzwExpandCodeToStack:
         ADD     HL,DE
         LD      A,(HL)
         LD      C,A
-        LD      HL,(LzwStackPtr)
-        LD      A,H
+        LD      A,IXH
         CP      HIGH #8000
         JP      NC,LzwInvalidStream
-        LD      (HL),C
-        INC     HL
-        LD      (LzwStackPtr),HL
+        LD      (IX + 0),C
+        INC     IX
         POP     HL
         ADD     HL,HL
         LD      DE,LZW_PREFIX_BASE
@@ -369,8 +362,30 @@ CacheBeginCanvasOutput:
         INC     HL
         LD      A,(HL)
         LD      (CanvasTransparentIndex),A
+        CALL    CacheSelectCanvasPutPixel
         CALL    CacheCanvasSeekFrameStart
         JP      CacheMapCanvasOutputPage
+
+CacheSelectCanvasPutPixel:
+        LD      DE,CacheCanvasPutPixelOpaque
+        LD      A,(CanvasTransparentFlag)
+        OR      A
+        JR      Z,.patch_calls
+        LD      DE,CacheCanvasPutPixelTransparent
+.patch_calls:
+        LD      HL,CacheDecodeCurrentFrameToCanvas.next_code + 14
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        LD      HL,CacheLzwOutputCodeString + 11
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        LD      HL,CacheLzwOutputCodeString.pop_loop + 17
+        LD      (HL),E
+        INC     HL
+        LD      (HL),D
+        RET
 
 CacheGetCurrentFrameEntryPtr:
         LD      HL,(CurrentPlaybackFrame)
@@ -678,6 +693,48 @@ CacheCanvasPutPixel:
         LD      A,(CanvasOutputByte)
         LD      (HL),A
 .advance_pixel:
+        CALL    CacheCanvasAdvancePixel
+        RET     C
+        LD      A,(CanvasOutputByte)
+        OR      A
+        RET
+
+CacheCanvasPutPixelTransparent:
+        LD      (CanvasOutputByte),A
+        LD      A,(CanvasOutputDoneFlag)
+        OR      A
+        JR      Z,.not_done
+        OR      A
+        RET
+.not_done:
+        LD      A,(CanvasOutputByte)
+        LD      HL,CanvasTransparentIndex
+        CP      (HL)
+        JR      Z,.advance_pixel
+.write_pixel:
+        CALL    CacheMapCanvasOutputPage
+        LD      HL,(CanvasOutputPtr)
+        LD      A,(CanvasOutputByte)
+        LD      (HL),A
+.advance_pixel:
+        CALL    CacheCanvasAdvancePixel
+        RET     C
+        LD      A,(CanvasOutputByte)
+        OR      A
+        RET
+
+CacheCanvasPutPixelOpaque:
+        LD      (CanvasOutputByte),A
+        LD      A,(CanvasOutputDoneFlag)
+        OR      A
+        JR      Z,.not_done
+        OR      A
+        RET
+.not_done:
+        CALL    CacheMapCanvasOutputPage
+        LD      HL,(CanvasOutputPtr)
+        LD      A,(CanvasOutputByte)
+        LD      (HL),A
         CALL    CacheCanvasAdvancePixel
         RET     C
         LD      A,(CanvasOutputByte)
