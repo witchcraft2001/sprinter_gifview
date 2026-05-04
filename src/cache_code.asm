@@ -586,10 +586,10 @@ CacheFrameStreamGetByte:
 .read_data:
         CALL    CacheFrameStreamRawGetByte
         RET     C
-        LD      (FrameStreamByte),A
+        LD      C,A
         LD      HL,FrameStreamSubBlockRemaining
         DEC     (HL)
-        LD      A,(FrameStreamByte)
+        LD      A,C
         OR      A
         RET
 .done:
@@ -603,7 +603,7 @@ CacheFrameStreamRawGetByte:
         CALL    CacheFrameStreamMapCurrentPage
         LD      HL,(FrameStreamPtr)
         LD      A,(HL)
-        LD      (FrameStreamByte),A
+        PUSH    AF
         INC     HL
         LD      A,H
         OR      A
@@ -615,8 +615,8 @@ CacheFrameStreamRawGetByte:
 .store_ptr:
         LD      (FrameStreamPtr),HL
 .done:
+        POP     AF
         POP     HL
-        LD      A,(FrameStreamByte)
         OR      A
         RET
 

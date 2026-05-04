@@ -61,7 +61,9 @@
   add now keeps the loaded `LzwNextCode` in `BC`, removing repeated memory
   reads when writing prefix/suffix entries. Cache bit reads now return the bit
   directly in `A`, avoiding the `LzwReadBitValue` memory round-trip used by the
-  fallback path.
+  fallback path. Cache frame stream reads now avoid the `FrameStreamByte`
+  memory round-trip as well, preserving bytes across pointer/page updates via
+  registers/stack instead.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.
