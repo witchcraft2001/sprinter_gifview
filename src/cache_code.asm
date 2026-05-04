@@ -251,7 +251,8 @@ CacheLzwAddDictionaryEntry:
         LD      A,H
         CP      #10
         RET     NC
-        LD      HL,(LzwNextCode)
+        LD      B,H
+        LD      C,L
         ADD     HL,HL
         LD      DE,LZW_PREFIX_BASE
         ADD     HL,DE
@@ -259,12 +260,14 @@ CacheLzwAddDictionaryEntry:
         LD      (HL),E
         INC     HL
         LD      (HL),D
-        LD      HL,(LzwNextCode)
+        LD      H,B
+        LD      L,C
         LD      DE,LZW_SUFFIX_BASE
         ADD     HL,DE
         LD      A,(LzwFirstChar)
         LD      (HL),A
-        LD      HL,(LzwNextCode)
+        LD      H,B
+        LD      L,C
         INC     HL
         LD      (LzwNextCode),HL
         LD      A,(LzwCodeSize)
@@ -553,11 +556,9 @@ CacheLzwReadBit:
         LD      (LzwBitsRemaining),A
         LD      A,#00
         ADC     A,#00
-        LD      (LzwReadBitValue),A
         POP     DE
         POP     BC
         POP     HL
-        LD      A,(LzwReadBitValue)
         OR      A
         RET
 .end_of_stream:

@@ -57,7 +57,11 @@
   LZW dictionary growth in the cache path now tracks `LzwNextCodeLimit`, so
   each dictionary add compares against a cached threshold instead of calling
   `CacheLzwPowerOfTwo`. Dictionary reset now derives that threshold directly
-  from `LzwClearCode`, avoiding another table lookup on clear codes.
+  from `LzwClearCode`, avoiding another table lookup on clear codes. Dictionary
+  add now keeps the loaded `LzwNextCode` in `BC`, removing repeated memory
+  reads when writing prefix/suffix entries. Cache bit reads now return the bit
+  directly in `A`, avoiding the `LzwReadBitValue` memory round-trip used by the
+  fallback path.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.
