@@ -284,7 +284,6 @@ CacheLzwAddDictionaryEntry:
         LD      A,(LzwCodeSize)
         INC     A
         LD      (LzwCodeSize),A
-        LD      HL,(LzwNextCodeLimit)
         ADD     HL,HL
         LD      (LzwNextCodeLimit),HL
         CALL    CacheLzwSetCodeMask
@@ -520,30 +519,30 @@ CacheLzwReadCode:
         LD      DE,#0001
         LD      A,(LzwCodeSize)
         LD      B,A
-.loop:
+        LD      A,(LzwCurrentByte)
+        LD      C,A
         LD      A,(LzwBitsRemaining)
+.loop:
         OR      A
         JR      NZ,.have_bits
         EXX
         CALL    CacheFrameStreamGetByte
         EXX
         JR      C,.end_of_stream
-        LD      (LzwCurrentByte),A
+        LD      C,A
         LD      A,#08
-        LD      (LzwBitsRemaining),A
 .have_bits:
-        LD      A,(LzwCurrentByte)
-        SRL     A
-        LD      (LzwCurrentByte),A
+        SRL     C
         JR      NC,.next_bit
         ADD     HL,DE
 .next_bit:
-        LD      A,(LzwBitsRemaining)
         DEC     A
-        LD      (LzwBitsRemaining),A
         SLA     E
         RL      D
         DJNZ    .loop
+        LD      (LzwBitsRemaining),A
+        LD      A,C
+        LD      (LzwCurrentByte),A
         OR      A
         RET
 .end_of_stream:
@@ -566,9 +565,21 @@ CacheFrameStreamGetByte:
         JR      Z,.done
         LD      (FrameStreamSubBlockRemaining),A
 .read_data:
-        CALL    CacheFrameStreamRawGetByte
-        RET     C
+        CALL    CacheFrameStreamMapCurrentPage
+        LD      HL,(FrameStreamPtr)
+        LD      A,(HL)
         LD      C,A
+        INC     HL
+        LD      A,H
+        OR      A
+        JR      NZ,.store_data_ptr
+        LD      HL,LOAD_WINDOW
+        LD      (FrameStreamPtr),HL
+        CALL    CacheFrameStreamMapNextPage
+        JR      .data_ptr_done
+.store_data_ptr:
+        LD      (FrameStreamPtr),HL
+.data_ptr_done:
         LD      HL,FrameStreamSubBlockRemaining
         DEC     (HL)
         LD      A,C
@@ -606,12 +617,12 @@ CacheFrameStreamRawGetByte:
 CacheFrameStreamMapCurrentPage:
         LD      A,(Page3Owner)
         CP      #01
-        JR      NZ,.map_page
+        JR      NZ,CacheFrameStreamMapPageDirect
         LD      A,(FrameStreamPage)
         LD      HL,Page3MappedPage
         CP      (HL)
         RET     Z
-.map_page:
+CacheFrameStreamMapPageDirect:
         LD      A,(FrameStreamPage)
         LD      E,A
         LD      D,#00
@@ -629,12 +640,10 @@ CacheFrameStreamMapNextPage:
         LD      A,(FrameStreamPage)
         INC     A
         LD      (FrameStreamPage),A
-        LD      C,A
-        LD      A,(PagesNeeded)
-        CP      C
-        JP      C,CacheInvalidGifBlock
-        JP      Z,CacheInvalidGifBlock
-        JP      CacheFrameStreamMapCurrentPage
+        LD      HL,PagesNeeded
+        CP      (HL)
+        JP      NC,CacheInvalidGifBlock
+        JP      CacheFrameStreamMapPageDirect
 
 CacheMapPageTableIndexToPage3:
         PUSH    DE
@@ -741,7 +750,7 @@ CacheCanvasAdvancePixel:
         SCF
         RET
 .next_canvas_page:
-        CALL    CacheMapCanvasOutputPage
+        CALL    CacheMapCanvasOutputPageDirect
         LD      HL,LOAD_WINDOW
 .store_advanced_ptr:
         LD      (CanvasOutputPtr),HL
@@ -912,12 +921,12 @@ CacheCanvasAdvanceOutputPtrByDE:
 CacheMapCanvasOutputPage:
         LD      A,(Page3Owner)
         CP      #02
-        JR      NZ,.map_page
+        JR      NZ,CacheMapCanvasOutputPageDirect
         LD      A,(CanvasOutputPage)
         LD      HL,Page3MappedPage
         CP      (HL)
         RET     Z
-.map_page:
+CacheMapCanvasOutputPageDirect:
         LD      A,(CanvasOutputPage)
         LD      E,A
         LD      D,#00

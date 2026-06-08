@@ -55,10 +55,10 @@
   old main-memory LZW/canvas/disposal/blit variants should be removed once no
   active call sites remain, leaving only shared helpers and error labels needed
   by cache code.
-- Add a fast GIF sub-block byte path in `CacheFrameStreamGetByte`: when a
-  sub-block still has bytes and the stream pointer is not crossing a page,
-  read and advance directly; keep the current sub-block/page-boundary handling
-  as the slow path.
+- Keep refining the GIF sub-block byte path in `CacheFrameStreamGetByte`: data
+  bytes from an active sub-block now read and advance inline instead of calling
+  `CacheFrameStreamRawGetByte`; next candidate is reducing the remaining PAGE3
+  map check when consecutive LZW byte fetches stay on the same GIF page.
 - Use alternate register sets in hot loops where they can replace stack
   traffic. Candidate paths are LZW code reading, string expansion/output, GIF
   sub-block byte reading, accelerator copy/fill segments, and dirty-row blits;
@@ -102,18 +102,30 @@
   `CacheLzwPowerOfTwo`. Dictionary reset now derives that threshold directly
   from `LzwClearCode`, avoiding another table lookup on clear codes. Dictionary
   add now keeps the loaded `LzwNextCode` in `BC`, removing repeated memory
-  reads when writing prefix/suffix entries. Cache bit reads now return the bit
-  directly in `A`, avoiding the `LzwReadBitValue` memory round-trip used by the
-  fallback path. Cache frame stream reads now avoid the `FrameStreamByte`
+  reads when writing prefix/suffix entries. On code-size growth, the matched
+  `LzwNextCodeLimit` already in `HL` is doubled directly instead of reloading
+  the limit from memory. Cache bit reads now return the bit directly in `A`,
+  avoiding the `LzwReadBitValue` memory round-trip used by the fallback path.
+  Cache frame stream reads now avoid the `FrameStreamByte`
   memory round-trip as well, preserving bytes across pointer/page updates via
   registers/stack instead. The common raw stream read path keeps the byte in
   `B`; stack preservation is only used on the rare page-crossing path. Stream
   and canvas `PAGE3` output mappers inline page-table lookup and `OUT (PAGE3)`,
-  avoiding the preserving helper on actual remaps. `CacheLzwReadBit` now saves
-  `HL/BC/DE` only when a new byte must be fetched from the GIF sub-block stream,
-  leaving the common in-byte bit path free of stack traffic. The stable bit
-  reader has also been inlined into `CacheLzwReadCode`, removing one
+  avoiding the preserving helper on actual remaps. Stream next-page bounds now
+  compare the new page index directly against `(PagesNeeded)` with a single
+  carry check and jump straight to the stream page-map body without repeating
+  the owner/page check. Pixel output page crossings now jump straight to the
+  canvas page-map body without repeating the owner/page check. `CacheLzwReadCode`
+  now keeps `LzwCurrentByte` and `LzwBitsRemaining` in registers while assembling
+  one code, so the common in-byte bit path no longer reloads and stores them for
+  every bit. `CacheLzwReadBit` now saves `HL/BC/DE` only when a new byte must be
+  fetched from the GIF sub-block stream, leaving the common in-byte bit path free
+  of stack traffic. The stable bit reader has also been inlined into
+  `CacheLzwReadCode`, removing one
   `CALL`/`RET` pair per decoded bit without changing the bit-by-bit algorithm.
+  Active GIF sub-block data bytes now read and advance inline in
+  `CacheFrameStreamGetByte`, avoiding the raw-byte helper `CALL`/`RET` on the
+  normal LZW byte path.
   Decoded bits now use the carry from `SRL (LzwCurrentByte)` directly instead
   of materializing a temporary `0/1` value in `C`. LZW string expansion now
   preserves the current code in `DE` around suffix lookup instead of using
