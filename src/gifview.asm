@@ -1416,18 +1416,17 @@ LoadCurrentFramePalette:
         PUSH    DE
         LD      A,(PaletteFramePacked)
         CALL    CalcColorTableEntriesFromPacked
-        LD      (PaletteEntriesRemaining),HL
+        LD      B,L
         LD      A,VIDEO_PAGE_A
         OUT     (PAGE1),A
         CALL    SetPaletteDestBaseForWriteScreen
-        XOR     A
-        LD      (PaletteLoadIndex),A
+        EX      DE,HL
+        LD      C,#00
         CALL    MapPaletteSourcePage
         POP     HL
 .loop:
-        LD      A,(PaletteLoadIndex)
+        LD      A,C
         OUT     (PORT_Y),A
-        LD      DE,(PaletteDestBase)
         LD      A,(HL)
         LD      (DE),A
         INC     HL
@@ -1448,17 +1447,10 @@ LoadCurrentFramePalette:
         LD      A,H
         OR      A
         CALL    Z,PaletteAdvanceSourcePage
-        LD      (PaletteSourcePtr),HL
-        LD      HL,PaletteLoadIndex
-        INC     (HL)
-        LD      HL,(PaletteEntriesRemaining)
-        DEC     HL
-        LD      (PaletteEntriesRemaining),HL
-        LD      A,H
-        OR      L
-        JR      Z,.done
-        LD      HL,(PaletteSourcePtr)
-        JR      .loop
+        DEC     E
+        DEC     E
+        INC     C
+        DJNZ    .loop
 .done:
         CALL    MarkWriteScreenPaletteLocal
         LD      A,#C0
@@ -1468,23 +1460,20 @@ LoadCurrentFramePalette:
 
 PaletteAdvanceSourcePage:
         PUSH    DE
-        LD      HL,LOAD_WINDOW
-        LD      (PaletteSourcePtr),HL
         LD      HL,PaletteSourcePage
         INC     (HL)
         CALL    MapPaletteSourcePage
         POP     DE
-        LD      HL,(PaletteSourcePtr)
+        LD      HL,LOAD_WINDOW
         RET
 
 MapPaletteSourcePage:
         LD      A,(Page3Owner)
         CP      #04
         JR      NZ,.map_page
-        LD      A,(Page3MappedPage)
-        LD      B,A
         LD      A,(PaletteSourcePage)
-        CP      B
+        LD      HL,Page3MappedPage
+        CP      (HL)
         RET     Z
 .map_page:
         LD      A,(PaletteSourcePage)
@@ -2010,99 +1999,6 @@ MarkDirtyRectFromInput:
         LD      (DirtyBottom),HL
         RET
 
-BlitDirtyCanvasToVideo:
-        LD      A,(DirtyFlag)
-        OR      A
-        RET     Z
-        LD      HL,(DirtyRight)
-        LD      DE,(DirtyLeft)
-        OR      A
-        SBC     HL,DE
-        LD      A,H
-        OR      L
-        RET     Z
-        LD      (BlitRectWidth),HL
-        LD      HL,(DirtyBottom)
-        LD      DE,(DirtyTop)
-        OR      A
-        SBC     HL,DE
-        LD      A,H
-        OR      L
-        RET     Z
-        LD      (BlitRectRows),HL
-        LD      HL,GIF_MAX_WIDTH
-        LD      DE,(BlitRectWidth)
-        OR      A
-        SBC     HL,DE
-        LD      (BlitRowSkip),HL
-        IN      A,(PAGE3)
-        LD      (SavedPage3),A
-        IN      A,(PAGE1)
-        LD      (SavedPage1),A
-        LD      A,VIDEO_PAGE_A
-        OUT     (PAGE1),A
-        XOR     A
-        LD      (CanvasOutputPage),A
-        LD      (CanvasOutputDoneFlag),A
-        LD      HL,CANVAS_WINDOW
-        LD      (CanvasOutputPtr),HL
-        LD      HL,(DirtyLeft)
-        LD      (CanvasFrameLeft),HL
-        LD      HL,(DirtyTop)
-        LD      (CanvasFrameTop),HL
-        CALL    CanvasSeekFrameStart
-        LD      A,(CanvasOutputPage)
-        LD      (BlitSourcePage),A
-        LD      HL,(CanvasOutputPtr)
-        LD      (BlitSourcePtr),HL
-        CALL    MapBlitCanvasPage
-        LD      HL,(DirtyLeft)
-        LD      DE,(DisplayOffsetX)
-        ADD     HL,DE
-        LD      DE,(VideoWriteOffset)
-        ADD     HL,DE
-        LD      (BlitRectLeft),HL
-        LD      HL,(DirtyTop)
-        LD      A,L
-        LD      HL,DisplayOffsetY
-        ADD     A,(HL)
-        LD      (VideoRowIndex),A
-.row_loop:
-        LD      A,(VideoRowIndex)
-        OUT     (PORT_Y),A
-        CALL    CacheBlitDirtyCanvasRowToVideo
-        LD      DE,(BlitRowSkip)
-        CALL    AdvanceBlitSourcePtrByDE
-        LD      HL,VideoRowIndex
-        INC     (HL)
-        LD      HL,(BlitRectRows)
-        DEC     HL
-        LD      (BlitRectRows),HL
-        LD      A,H
-        OR      L
-        JR      NZ,.row_loop
-        LD      A,#C0
-        OUT     (PORT_Y),A
-        CALL    RestorePage3
-        CALL    RestorePage1
-        RET
-
-AdvanceBlitSourcePtrByDE:
-        LD      HL,(BlitSourcePtr)
-        ADD     HL,DE
-        JR      NC,.store_ptr
-        PUSH    HL
-        LD      A,(BlitSourcePage)
-        INC     A
-        LD      (BlitSourcePage),A
-        CALL    MapBlitCanvasPage
-        POP     HL
-        LD      DE,LOAD_WINDOW
-        ADD     HL,DE
-.store_ptr:
-        LD      (BlitSourcePtr),HL
-        RET
-
 PlayGifFrames:
         CALL    EnterCacheWindow
         CALL    ResetDirtyRect
@@ -2113,13 +2009,13 @@ PlayGifFrames:
         CALL    RestorePage1
         CALL    RestorePage2
         CALL    RestorePage3
-        CALL    BlitDirtyCanvasToVideo
+        CALL    CacheBlitDirtyCanvasToVideo
         CALL    LoadCurrentFramePalette
         CALL    RestoreSystemWindow
         HALT
         CALL    EnterCacheWindow
         CALL    FlipVideoBuffers
-        CALL    BlitDirtyCanvasToVideo
+        CALL    CacheBlitDirtyCanvasToVideo
         CALL    ResetDirtyRect
         CALL    RestoreSystemWindow
         CALL    WaitFrameDelayOrKey
@@ -2631,10 +2527,6 @@ PaletteLoadIndex:
         DB      #00
 PaletteSourcePage:
         DB      #00
-PaletteSourcePtr:
-        DW      #0000
-PaletteEntriesRemaining:
-        DW      #0000
 PaletteFramePacked:
         DB      #00
 PaletteDestBase:

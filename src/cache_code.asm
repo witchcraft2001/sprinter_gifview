@@ -1350,6 +1350,83 @@ CacheAccCopyMemorySegmentNoEi:
         LD      B,B
         RET
 
+CacheBlitDirtyCanvasToVideo:
+        LD      A,(DirtyFlag)
+        OR      A
+        RET     Z
+        LD      HL,(DirtyRight)
+        LD      DE,(DirtyLeft)
+        OR      A
+        SBC     HL,DE
+        LD      A,H
+        OR      L
+        RET     Z
+        LD      (BlitRectWidth),HL
+        LD      HL,(DirtyBottom)
+        LD      DE,(DirtyTop)
+        OR      A
+        SBC     HL,DE
+        LD      A,H
+        OR      L
+        RET     Z
+        LD      (BlitRectRows),HL
+        LD      HL,GIF_MAX_WIDTH
+        LD      DE,(BlitRectWidth)
+        OR      A
+        SBC     HL,DE
+        LD      (BlitRowSkip),HL
+        IN      A,(PAGE3)
+        LD      (SavedPage3),A
+        IN      A,(PAGE1)
+        LD      (SavedPage1),A
+        LD      A,VIDEO_PAGE_A
+        OUT     (PAGE1),A
+        XOR     A
+        LD      (CanvasOutputPage),A
+        LD      (CanvasOutputDoneFlag),A
+        LD      HL,CANVAS_WINDOW
+        LD      (CanvasOutputPtr),HL
+        LD      HL,(DirtyLeft)
+        LD      (CanvasFrameLeft),HL
+        LD      HL,(DirtyTop)
+        LD      (CanvasFrameTop),HL
+        CALL    CacheCanvasSeekFrameStart
+        LD      A,(CanvasOutputPage)
+        LD      (BlitSourcePage),A
+        LD      HL,(CanvasOutputPtr)
+        LD      (BlitSourcePtr),HL
+        CALL    CacheMapBlitCanvasPage
+        LD      HL,(DirtyLeft)
+        LD      DE,(DisplayOffsetX)
+        ADD     HL,DE
+        LD      DE,(VideoWriteOffset)
+        ADD     HL,DE
+        LD      (BlitRectLeft),HL
+        LD      HL,(DirtyTop)
+        LD      A,L
+        LD      HL,DisplayOffsetY
+        ADD     A,(HL)
+        LD      (VideoRowIndex),A
+.row_loop:
+        LD      A,(VideoRowIndex)
+        OUT     (PORT_Y),A
+        CALL    CacheBlitDirtyCanvasRowToVideo
+        LD      DE,(BlitRowSkip)
+        CALL    CacheAdvanceBlitSourcePtrByDE
+        LD      HL,VideoRowIndex
+        INC     (HL)
+        LD      HL,(BlitRectRows)
+        DEC     HL
+        LD      (BlitRectRows),HL
+        LD      A,H
+        OR      L
+        JR      NZ,.row_loop
+        LD      A,#C0
+        OUT     (PORT_Y),A
+        CALL    RestorePage3
+        CALL    RestorePage1
+        RET
+
 CacheBlitDirtyCanvasRowToVideo:
         LD      HL,WORK_WINDOW
         LD      DE,(BlitRectLeft)
@@ -1425,5 +1502,21 @@ CacheAdvanceBlitCanvasPage:
 CacheMapBlitCanvasPage:
         LD      A,(BlitSourcePage)
         JP      CacheMapCanvasPageIndexToPage3
+
+CacheAdvanceBlitSourcePtrByDE:
+        LD      HL,(BlitSourcePtr)
+        ADD     HL,DE
+        JR      NC,.store_ptr
+        PUSH    HL
+        LD      A,(BlitSourcePage)
+        INC     A
+        LD      (BlitSourcePage),A
+        CALL    CacheMapBlitCanvasPage
+        POP     HL
+        LD      DE,LOAD_WINDOW
+        ADD     HL,DE
+.store_ptr:
+        LD      (BlitSourcePtr),HL
+        RET
 
         ENT

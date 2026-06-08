@@ -45,8 +45,11 @@
   reloads, and restores global palettes from `GlobalPaletteBuffer` only after
   a local color table has changed that screen. Local color table loads now use
   a direct `PORT_Y` plus `#43E0/#43E4` hardware loop and only take a slow path
-  on rare GIF page crossings. Next candidates are keeping the palette source
-  pointer in alternate registers and reducing per-color memory state updates.
+  on rare GIF page crossings. The local loop now keeps color count, palette
+  index, palette register base, and source pointer in registers instead of
+  updating memory counters per color. Next candidate is using alternate
+  registers in the rare page-crossing path or moving on to LZW/dirty-blit
+  hot loops.
 - Keep trimming duplicate non-cache render/decode code. The active playback
   path enters the cache window and calls `CacheDecodeCurrentFrameToCanvas`;
   old main-memory LZW/canvas/disposal/blit variants should be removed once no
@@ -68,10 +71,11 @@
 - Rework `CacheLzwOutputCodeString` to avoid `IX` in the hot stack pop/expand
   path. A normal `HL`/`DE` stack pointer should make stack byte reads/writes
   cheaper than `DEC IX` and `(IX + 0)` indexed addressing.
-- Move the remaining dirty-rect blit wrapper into cache. The row copy helper is
-  already cache-local, but the setup loop in main memory still calls through to
-  it row by row; moving the wrapper would keep page mapping and row stepping in
-  the cache path.
+- Continue optimizing dirty-rect blits. The dirty-rect setup and row loop now
+  live in cache alongside the row copy helper, so page mapping and source row
+  stepping stay on the cache path. Next candidates are reducing stack traffic
+  in `CacheBlitDirtyCanvasRowToVideo` and using alternate registers around the
+  accelerator copy segments.
 - Continue reducing call overhead in `CacheLzwOutputCodeString`. The stack
   reset/push/pop helpers, common LZW code comparisons, and dictionary
   prefix/suffix table address helpers are now inlined in the cache path. The
