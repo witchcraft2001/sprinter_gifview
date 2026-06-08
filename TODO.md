@@ -40,13 +40,13 @@
 - Revisit the experimental `CacheLzwReadCodeFast` bit-buffer reader only after
   adding diagnostics that compare emitted LZW code sequences against the stable
   bit-by-bit reader; the previous 24-bit version was faster but unstable.
-- Optimize palette updates. Playback currently reloads the current frame
-  palette before each flip even when the frame uses the already-installed
-  global color table. Skip per-frame palette loads for unchanged global
-  palettes, use `GlobalPaletteBuffer` instead of rereading the GIF table for
-  global-palette refreshes, and make local color table loads use a tight direct
-  hardware loop like the SDK `fade_apply.s` path (`PORT_Y` plus
-  `#43E0/#43E4` or equivalent `#C3E0/#C3E4` palette registers).
+- Continue optimizing palette updates. Playback now tracks whether each
+  hardware screen palette is global or local, skips unchanged global-palette
+  reloads, and restores global palettes from `GlobalPaletteBuffer` only after
+  a local color table has changed that screen. Local color table loads now use
+  a direct `PORT_Y` plus `#43E0/#43E4` hardware loop and only take a slow path
+  on rare GIF page crossings. Next candidates are keeping the palette source
+  pointer in alternate registers and reducing per-color memory state updates.
 - Keep trimming duplicate non-cache render/decode code. The active playback
   path enters the cache window and calls `CacheDecodeCurrentFrameToCanvas`;
   old main-memory LZW/canvas/disposal/blit variants should be removed once no

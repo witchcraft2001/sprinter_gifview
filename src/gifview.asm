@@ -1343,6 +1343,9 @@ LoadPreparedGlobalPalette:
         CALL    LoadPreparedGlobalPaletteToBase
         LD      HL,#43E4
         CALL    LoadPreparedGlobalPaletteToBase
+        XOR     A
+        LD      (PaletteScreenAState),A
+        LD      (PaletteScreenBState),A
         LD      A,#C0
         OUT     (PORT_Y),A
         JP      RestorePage1
@@ -1376,6 +1379,27 @@ LoadPreparedGlobalPaletteToBase:
         RET
 
 LoadCurrentFramePalette:
+        CALL    GetCurrentFrameEntryPtr
+        LD      DE,14
+        ADD     HL,DE
+        LD      A,(HL)
+        LD      (PaletteFramePacked),A
+        BIT     7,A
+        JR      NZ,.local_palette
+.global_palette:
+        CALL    IsWriteScreenPaletteGlobal
+        RET     Z
+        IN      A,(PAGE1)
+        LD      (SavedPage1),A
+        LD      A,VIDEO_PAGE_A
+        OUT     (PAGE1),A
+        CALL    SetPaletteDestBaseForWriteScreen
+        CALL    LoadPreparedGlobalPaletteToBase
+        CALL    MarkWriteScreenPaletteGlobal
+        LD      A,#C0
+        OUT     (PORT_Y),A
+        JP      RestorePage1
+.local_palette:
         IN      A,(PAGE3)
         LD      (SavedPage3),A
         IN      A,(PAGE1)
@@ -1389,22 +1413,9 @@ LoadCurrentFramePalette:
         LD      E,(HL)
         INC     HL
         LD      D,(HL)
-        LD      (PaletteSourcePtr),DE
-        CALL    GetCurrentFrameEntryPtr
-        LD      DE,14
-        ADD     HL,DE
-        LD      A,(HL)
-        LD      (PaletteFramePacked),A
-        BIT     7,A
-        JR      Z,.global_palette
+        PUSH    DE
+        LD      A,(PaletteFramePacked)
         CALL    CalcColorTableEntriesFromPacked
-        JR      .entries_ready
-.global_palette:
-        LD      HL,(GifGctEntries)
-        LD      A,H
-        OR      L
-        JR      Z,.done
-.entries_ready:
         LD      (PaletteEntriesRemaining),HL
         LD      A,VIDEO_PAGE_A
         OUT     (PAGE1),A
@@ -1412,21 +1423,32 @@ LoadCurrentFramePalette:
         XOR     A
         LD      (PaletteLoadIndex),A
         CALL    MapPaletteSourcePage
+        POP     HL
 .loop:
         LD      A,(PaletteLoadIndex)
         OUT     (PORT_Y),A
         LD      DE,(PaletteDestBase)
-        CALL    PaletteReadByte
-        CALL    ConvertRgb8ToRgb6
+        LD      A,(HL)
         LD      (DE),A
+        INC     HL
+        LD      A,H
+        OR      A
+        CALL    Z,PaletteAdvanceSourcePage
         INC     E
-        CALL    PaletteReadByte
-        CALL    ConvertRgb8ToRgb6
+        LD      A,(HL)
         LD      (DE),A
+        INC     HL
+        LD      A,H
+        OR      A
+        CALL    Z,PaletteAdvanceSourcePage
         INC     E
-        CALL    PaletteReadByte
-        CALL    ConvertRgb8ToRgb6
+        LD      A,(HL)
         LD      (DE),A
+        INC     HL
+        LD      A,H
+        OR      A
+        CALL    Z,PaletteAdvanceSourcePage
+        LD      (PaletteSourcePtr),HL
         LD      HL,PaletteLoadIndex
         INC     (HL)
         LD      HL,(PaletteEntriesRemaining)
@@ -1434,33 +1456,25 @@ LoadCurrentFramePalette:
         LD      (PaletteEntriesRemaining),HL
         LD      A,H
         OR      L
-        JR      NZ,.loop
+        JR      Z,.done
+        LD      HL,(PaletteSourcePtr)
+        JR      .loop
 .done:
+        CALL    MarkWriteScreenPaletteLocal
         LD      A,#C0
         OUT     (PORT_Y),A
         CALL    RestorePage3
         JP      RestorePage1
 
-PaletteReadByte:
-        PUSH    HL
-        CALL    MapPaletteSourcePage
-        LD      HL,(PaletteSourcePtr)
-        LD      A,(HL)
-        LD      (PaletteReadValue),A
-        INC     HL
-        LD      A,H
-        OR      A
-        JR      NZ,.store_ptr
+PaletteAdvanceSourcePage:
+        PUSH    DE
         LD      HL,LOAD_WINDOW
         LD      (PaletteSourcePtr),HL
         LD      HL,PaletteSourcePage
         INC     (HL)
-        JR      .done
-.store_ptr:
-        LD      (PaletteSourcePtr),HL
-.done:
-        POP     HL
-        LD      A,(PaletteReadValue)
+        CALL    MapPaletteSourcePage
+        POP     DE
+        LD      HL,(PaletteSourcePtr)
         RET
 
 MapPaletteSourcePage:
@@ -1491,6 +1505,37 @@ SetPaletteDestBaseForWriteScreen:
 .screen_b:
         LD      HL,#43E4
         LD      (PaletteDestBase),HL
+        RET
+
+IsWriteScreenPaletteGlobal:
+        LD      A,(VideoWriteScreen)
+        CP      RGMOD_SCR_B
+        JR      Z,.screen_b
+        LD      A,(PaletteScreenAState)
+        OR      A
+        RET
+.screen_b:
+        LD      A,(PaletteScreenBState)
+        OR      A
+        RET
+
+MarkWriteScreenPaletteGlobal:
+        XOR     A
+        JR      StoreWriteScreenPaletteState
+
+MarkWriteScreenPaletteLocal:
+        LD      A,#01
+
+StoreWriteScreenPaletteState:
+        LD      C,A
+        LD      A,(VideoWriteScreen)
+        CP      RGMOD_SCR_B
+        LD      A,C
+        JR      Z,.screen_b
+        LD      (PaletteScreenAState),A
+        RET
+.screen_b:
+        LD      (PaletteScreenBState),A
         RET
 
 PrintFileInfo:
@@ -2340,6 +2385,10 @@ VideoWriteScreen:
         DB      RGMOD_SCR_B
 VideoWriteOffset:
         DW      VIDEO_SCREEN_B_OFFSET
+PaletteScreenAState:
+        DB      #00
+PaletteScreenBState:
+        DB      #00
 SavedVideoMode:
         DB      #00
 SavedVideoBank:
@@ -2587,8 +2636,6 @@ PaletteSourcePtr:
 PaletteEntriesRemaining:
         DW      #0000
 PaletteFramePacked:
-        DB      #00
-PaletteReadValue:
         DB      #00
 PaletteDestBase:
         DW      #43E0
