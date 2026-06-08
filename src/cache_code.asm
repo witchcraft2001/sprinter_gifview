@@ -520,8 +520,31 @@ CacheLzwReadCode:
         LD      A,(LzwCodeSize)
         LD      B,A
 .loop:
-        CALL    CacheLzwReadBit
+        LD      A,(LzwBitsRemaining)
+        OR      A
+        JR      NZ,.have_bits
+        PUSH    HL
+        PUSH    BC
+        PUSH    DE
+        CALL    CacheFrameStreamGetByte
+        POP     DE
+        POP     BC
+        POP     HL
         JR      C,.end_of_stream
+        LD      (LzwCurrentByte),A
+        LD      A,#08
+        LD      (LzwBitsRemaining),A
+.have_bits:
+        LD      A,(LzwCurrentByte)
+        SRL     A
+        LD      (LzwCurrentByte),A
+        LD      A,#00
+        ADC     A,#00
+        LD      C,A
+        LD      A,(LzwBitsRemaining)
+        DEC     A
+        LD      (LzwBitsRemaining),A
+        LD      A,C
         OR      A
         JR      Z,.next_bit
         ADD     HL,DE
@@ -532,39 +555,6 @@ CacheLzwReadCode:
         OR      A
         RET
 .end_of_stream:
-        SCF
-        RET
-
-CacheLzwReadBit:
-        PUSH    HL
-        PUSH    BC
-        PUSH    DE
-        LD      A,(LzwBitsRemaining)
-        OR      A
-        JR      NZ,.have_bits
-        CALL    CacheFrameStreamGetByte
-        JR      C,.end_of_stream
-        LD      (LzwCurrentByte),A
-        LD      A,#08
-        LD      (LzwBitsRemaining),A
-.have_bits:
-        LD      A,(LzwCurrentByte)
-        SRL     A
-        LD      (LzwCurrentByte),A
-        LD      A,(LzwBitsRemaining)
-        DEC     A
-        LD      (LzwBitsRemaining),A
-        LD      A,#00
-        ADC     A,#00
-        POP     DE
-        POP     BC
-        POP     HL
-        OR      A
-        RET
-.end_of_stream:
-        POP     DE
-        POP     BC
-        POP     HL
         SCF
         RET
 
@@ -603,20 +593,24 @@ CacheFrameStreamRawGetByte:
         CALL    CacheFrameStreamMapCurrentPage
         LD      HL,(FrameStreamPtr)
         LD      A,(HL)
-        PUSH    AF
+        LD      B,A
         INC     HL
         LD      A,H
         OR      A
         JR      NZ,.store_ptr
         LD      HL,LOAD_WINDOW
         LD      (FrameStreamPtr),HL
+        LD      A,B
+        PUSH    AF
         CALL    CacheFrameStreamMapNextPage
-        JR      .done
-.store_ptr:
-        LD      (FrameStreamPtr),HL
-.done:
         POP     AF
         POP     HL
+        OR      A
+        RET
+.store_ptr:
+        LD      (FrameStreamPtr),HL
+        POP     HL
+        LD      A,B
         OR      A
         RET
 
@@ -631,11 +625,15 @@ CacheFrameStreamMapCurrentPage:
         RET     Z
 .map_page:
         LD      A,(FrameStreamPage)
+        LD      E,A
+        LD      D,#00
         LD      HL,GifPageTable
-        CALL    CacheMapPageTableIndexToPage3
+        ADD     HL,DE
+        LD      A,(HL)
+        OUT     (PAGE3),A
         LD      A,#01
         LD      (Page3Owner),A
-        LD      A,(FrameStreamPage)
+        LD      A,E
         LD      (Page3MappedPage),A
         RET
 
@@ -934,10 +932,15 @@ CacheMapCanvasOutputPage:
         RET     Z
 .map_page:
         LD      A,(CanvasOutputPage)
-        CALL    CacheMapCanvasPageIndexToPage3
+        LD      E,A
+        LD      D,#00
+        LD      HL,CanvasPageTable
+        ADD     HL,DE
+        LD      A,(HL)
+        OUT     (PAGE3),A
         LD      A,#02
         LD      (Page3Owner),A
-        LD      A,(CanvasOutputPage)
+        LD      A,E
         LD      (Page3MappedPage),A
         RET
 

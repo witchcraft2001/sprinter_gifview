@@ -63,7 +63,14 @@
   directly in `A`, avoiding the `LzwReadBitValue` memory round-trip used by the
   fallback path. Cache frame stream reads now avoid the `FrameStreamByte`
   memory round-trip as well, preserving bytes across pointer/page updates via
-  registers/stack instead.
+  registers/stack instead. The common raw stream read path keeps the byte in
+  `B`; stack preservation is only used on the rare page-crossing path. Stream
+  and canvas `PAGE3` output mappers inline page-table lookup and `OUT (PAGE3)`,
+  avoiding the preserving helper on actual remaps. `CacheLzwReadBit` now saves
+  `HL/BC/DE` only when a new byte must be fetched from the GIF sub-block stream,
+  leaving the common in-byte bit path free of stack traffic. The stable bit
+  reader has also been inlined into `CacheLzwReadCode`, removing one
+  `CALL`/`RET` pair per decoded bit without changing the bit-by-bit algorithm.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.
