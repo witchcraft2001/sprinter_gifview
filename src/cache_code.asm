@@ -223,9 +223,10 @@ CacheLzwExpandCodeToStack:
         CP      E
 .clear_code_compared:
         JR      C,.literal
-        PUSH    HL
-        LD      DE,LZW_SUFFIX_BASE
-        ADD     HL,DE
+        LD      D,H
+        LD      E,L
+        LD      BC,LZW_SUFFIX_BASE
+        ADD     HL,BC
         LD      A,(HL)
         LD      C,A
         LD      A,IXH
@@ -233,7 +234,7 @@ CacheLzwExpandCodeToStack:
         JP      NC,LzwInvalidStream
         LD      (IX + 0),C
         INC     IX
-        POP     HL
+        EX      DE,HL
         ADD     HL,HL
         LD      DE,LZW_PREFIX_BASE
         ADD     HL,DE
@@ -606,10 +607,9 @@ CacheFrameStreamMapCurrentPage:
         LD      A,(Page3Owner)
         CP      #01
         JR      NZ,.map_page
-        LD      A,(Page3MappedPage)
-        LD      B,A
         LD      A,(FrameStreamPage)
-        CP      B
+        LD      HL,Page3MappedPage
+        CP      (HL)
         RET     Z
 .map_page:
         LD      A,(FrameStreamPage)
@@ -913,10 +913,9 @@ CacheMapCanvasOutputPage:
         LD      A,(Page3Owner)
         CP      #02
         JR      NZ,.map_page
-        LD      A,(Page3MappedPage)
-        LD      B,A
         LD      A,(CanvasOutputPage)
-        CP      B
+        LD      HL,Page3MappedPage
+        CP      (HL)
         RET     Z
 .map_page:
         LD      A,(CanvasOutputPage)

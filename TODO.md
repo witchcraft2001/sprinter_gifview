@@ -68,7 +68,8 @@
   saves. `CacheFrameStreamRawGetByte` now treats `HL` as scratch, removing
   per-byte `PUSH`/`POP HL` traffic from the raw stream reader.
   `CacheLzwReadCode` now uses `EXX` around stream-byte fetches instead of
-  saving `HL/BC/DE` on the stack.
+  saving `HL/BC/DE` on the stack. Stream and canvas `PAGE3` mappers no longer
+  use `B` as a temporary when checking the already-mapped page.
 - Replace the current bit-by-bit `CacheLzwReadCode` with a verified LSB
   byte-buffer reader once diagnostics are in place. The target is to fetch
   whole bytes from the GIF stream, mask `LzwCodeSize` bits, and shift the
@@ -114,7 +115,9 @@
   reader has also been inlined into `CacheLzwReadCode`, removing one
   `CALL`/`RET` pair per decoded bit without changing the bit-by-bit algorithm.
   Decoded bits now use the carry from `SRL (LzwCurrentByte)` directly instead
-  of materializing a temporary `0/1` value in `C`.
+  of materializing a temporary `0/1` value in `C`. LZW string expansion now
+  preserves the current code in `DE` around suffix lookup instead of using
+  `PUSH HL`/`POP HL`.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.
