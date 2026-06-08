@@ -40,6 +40,38 @@
 - Revisit the experimental `CacheLzwReadCodeFast` bit-buffer reader only after
   adding diagnostics that compare emitted LZW code sequences against the stable
   bit-by-bit reader; the previous 24-bit version was faster but unstable.
+- Optimize palette updates. Playback currently reloads the current frame
+  palette before each flip even when the frame uses the already-installed
+  global color table. Skip per-frame palette loads for unchanged global
+  palettes, use `GlobalPaletteBuffer` instead of rereading the GIF table for
+  global-palette refreshes, and make local color table loads use a tight direct
+  hardware loop like the SDK `fade_apply.s` path (`PORT_Y` plus
+  `#43E0/#43E4` or equivalent `#C3E0/#C3E4` palette registers).
+- Keep trimming duplicate non-cache render/decode code. The active playback
+  path enters the cache window and calls `CacheDecodeCurrentFrameToCanvas`;
+  old main-memory LZW/canvas/disposal/blit variants should be removed once no
+  active call sites remain, leaving only shared helpers and error labels needed
+  by cache code.
+- Add a fast GIF sub-block byte path in `CacheFrameStreamGetByte`: when a
+  sub-block still has bytes and the stream pointer is not crossing a page,
+  read and advance directly; keep the current sub-block/page-boundary handling
+  as the slow path.
+- Use alternate register sets in hot loops where they can replace stack
+  traffic. Candidate paths are LZW code reading, string expansion/output, GIF
+  sub-block byte reading, accelerator copy/fill segments, and dirty-row blits;
+  prefer `EXX`/`EX AF,AF'` to repeated `PUSH`/`POP` when the live register
+  state is simple enough to reason about safely.
+- Replace the current bit-by-bit `CacheLzwReadCode` with a verified LSB
+  byte-buffer reader once diagnostics are in place. The target is to fetch
+  whole bytes from the GIF stream, mask `LzwCodeSize` bits, and shift the
+  buffer once per LZW code instead of looping once per decoded bit.
+- Rework `CacheLzwOutputCodeString` to avoid `IX` in the hot stack pop/expand
+  path. A normal `HL`/`DE` stack pointer should make stack byte reads/writes
+  cheaper than `DEC IX` and `(IX + 0)` indexed addressing.
+- Move the remaining dirty-rect blit wrapper into cache. The row copy helper is
+  already cache-local, but the setup loop in main memory still calls through to
+  it row by row; moving the wrapper would keep page mapping and row stepping in
+  the cache path.
 - Continue reducing call overhead in `CacheLzwOutputCodeString`. The stack
   reset/push/pop helpers, common LZW code comparisons, and dictionary
   prefix/suffix table address helpers are now inlined in the cache path. The
