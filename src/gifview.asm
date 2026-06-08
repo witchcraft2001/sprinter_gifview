@@ -13,7 +13,6 @@ FLAG_FAST   EQU #08
 
 INPUT_FILENAME_MAX EQU 64
 CACHE_RUNTIME_BASE EQU #0100
-MAX_GIF_SIZE_HIGH EQU #0018
 PAGE_SIZE EQU #4000
 LOAD_WINDOW EQU #C000
 WORK_WINDOW EQU #4000
@@ -377,33 +376,35 @@ ValidateFileSize:
         LD      HL,(FileSizeHigh)
         LD      DE,(FileSizeLow)
         LD      A,H
-        OR      A
-        JR      NZ,.too_large
-        LD      A,L
-        CP      LOW MAX_GIF_SIZE_HIGH + 1
-        JR      NC,.too_large
-        CP      LOW MAX_GIF_SIZE_HIGH
-        JR      NZ,.not_at_limit
-        LD      A,D
-        OR      E
-        JR      NZ,.too_large
-.not_at_limit:
-        LD      A,H
         OR      L
         OR      D
         OR      E
         JR      Z,.empty
         RET
-.too_large:
-        LD      HL,MsgTooLarge
-        CALL    PrintString
-        JP      ExitWithError
 .empty:
         LD      HL,MsgEmptyFile
         CALL    PrintString
         JP      ExitWithError
 
 CalculatePagesNeeded:
+        LD      HL,(FileSizeHigh)
+        LD      A,H
+        OR      A
+        JR      NZ,.too_many_pages
+        LD      A,L
+        CP      #40
+        JR      NC,.too_many_pages
+        CP      #3F
+        JR      NZ,.calculate
+        LD      HL,(FileSizeLow)
+        LD      A,H
+        CP      #C0
+        JR      C,.calculate
+        JR      NZ,.too_many_pages
+        LD      A,L
+        OR      A
+        JR      NZ,.too_many_pages
+.calculate:
         LD      HL,(FileSizeLow)
         LD      D,H
         LD      E,L
@@ -428,6 +429,10 @@ CalculatePagesNeeded:
         ADD     A,C
         LD      (PagesNeeded),A
         RET
+.too_many_pages:
+        LD      HL,MsgNoMemory
+        CALL    PrintString
+        JP      ExitWithError
 
 AllocateGifMemory:
         LD      A,(PagesNeeded)
@@ -2549,7 +2554,8 @@ InputFileName:
         DS      INPUT_FILENAME_MAX,#00
 
 MsgBanner:
-        DB      #0D,#0A,"GIFVIEW for Sprinter DSS",#0D,#0A,#00
+        DB      #0D,#0A,"GIFVIEW 0.1 for Sprinter DSS",#0D,#0A
+        DB      "Dmitry Mikhalchenkov (SprinterTeam)",#0D,#0A,#00
 MsgUsage:
         DB      "Usage: GIFVIEW.EXE <filename.gif> [-center] [-i] [-once] [-fast]",#0D,#0A,#00
 MsgSelectedFile:
@@ -2622,8 +2628,6 @@ MsgSeekError:
         DB      "Error: cannot seek file.",#0D,#0A,#00
 MsgReadError:
         DB      "Error: cannot read file.",#0D,#0A,#00
-MsgTooLarge:
-        DB      "Error: GIF file is larger than 1.5 MB.",#0D,#0A,#00
 MsgEmptyFile:
         DB      "Error: empty file.",#0D,#0A,#00
 MsgNoMemory:
