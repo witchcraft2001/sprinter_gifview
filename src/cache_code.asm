@@ -523,13 +523,9 @@ CacheLzwReadCode:
         LD      A,(LzwBitsRemaining)
         OR      A
         JR      NZ,.have_bits
-        PUSH    HL
-        PUSH    BC
-        PUSH    DE
+        EXX
         CALL    CacheFrameStreamGetByte
-        POP     DE
-        POP     BC
-        POP     HL
+        EXX
         JR      C,.end_of_stream
         LD      (LzwCurrentByte),A
         LD      A,#08
@@ -538,17 +534,12 @@ CacheLzwReadCode:
         LD      A,(LzwCurrentByte)
         SRL     A
         LD      (LzwCurrentByte),A
-        LD      A,#00
-        ADC     A,#00
-        LD      C,A
+        JR      NC,.next_bit
+        ADD     HL,DE
+.next_bit:
         LD      A,(LzwBitsRemaining)
         DEC     A
         LD      (LzwBitsRemaining),A
-        LD      A,C
-        OR      A
-        JR      Z,.next_bit
-        ADD     HL,DE
-.next_bit:
         SLA     E
         RL      D
         DJNZ    .loop
@@ -589,7 +580,6 @@ CacheFrameStreamGetByte:
         RET
 
 CacheFrameStreamRawGetByte:
-        PUSH    HL
         CALL    CacheFrameStreamMapCurrentPage
         LD      HL,(FrameStreamPtr)
         LD      A,(HL)
@@ -601,15 +591,13 @@ CacheFrameStreamRawGetByte:
         LD      HL,LOAD_WINDOW
         LD      (FrameStreamPtr),HL
         LD      A,B
-        PUSH    AF
+        EX      AF,AF'
         CALL    CacheFrameStreamMapNextPage
-        POP     AF
-        POP     HL
+        EX      AF,AF'
         OR      A
         RET
 .store_ptr:
         LD      (FrameStreamPtr),HL
-        POP     HL
         LD      A,B
         OR      A
         RET
@@ -1449,7 +1437,7 @@ CacheBlitDirtyCanvasRowToVideo:
         RET
 .ldir_copy:
         LD      A,C
-        PUSH    AF
+        EX      AF,AF'
         LD      C,#FF
         CALL    CacheAccCopyMemorySegmentNoEi
         LD      BC,#00FF
@@ -1457,7 +1445,7 @@ CacheBlitDirtyCanvasRowToVideo:
         EX      DE,HL
         ADD     HL,BC
         EX      DE,HL
-        POP     AF
+        EX      AF,AF'
         INC     A
         LD      C,A
         CALL    CacheAccCopyMemorySegmentNoEi

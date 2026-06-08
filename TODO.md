@@ -63,7 +63,12 @@
   traffic. Candidate paths are LZW code reading, string expansion/output, GIF
   sub-block byte reading, accelerator copy/fill segments, and dirty-row blits;
   prefer `EXX`/`EX AF,AF'` to repeated `PUSH`/`POP` when the live register
-  state is simple enough to reason about safely.
+  state is simple enough to reason about safely. Dirty-row wide copies and GIF
+  stream page-cross byte preservation now use alternate `AF` instead of stack
+  saves. `CacheFrameStreamRawGetByte` now treats `HL` as scratch, removing
+  per-byte `PUSH`/`POP HL` traffic from the raw stream reader.
+  `CacheLzwReadCode` now uses `EXX` around stream-byte fetches instead of
+  saving `HL/BC/DE` on the stack.
 - Replace the current bit-by-bit `CacheLzwReadCode` with a verified LSB
   byte-buffer reader once diagnostics are in place. The target is to fetch
   whole bytes from the GIF stream, mask `LzwCodeSize` bits, and shift the
@@ -73,9 +78,10 @@
   cheaper than `DEC IX` and `(IX + 0)` indexed addressing.
 - Continue optimizing dirty-rect blits. The dirty-rect setup and row loop now
   live in cache alongside the row copy helper, so page mapping and source row
-  stepping stay on the cache path. Next candidates are reducing stack traffic
-  in `CacheBlitDirtyCanvasRowToVideo` and using alternate registers around the
-  accelerator copy segments.
+  stepping stay on the cache path. The wide-row accelerator path now keeps its
+  second segment length in alternate `AF` instead of pushing it to the stack.
+  Next candidates are reducing stack traffic in rare page-crossing byte-copy
+  paths and using alternate registers in LZW code readers.
 - Continue reducing call overhead in `CacheLzwOutputCodeString`. The stack
   reset/push/pop helpers, common LZW code comparisons, and dictionary
   prefix/suffix table address helpers are now inlined in the cache path. The
@@ -107,6 +113,8 @@
   leaving the common in-byte bit path free of stack traffic. The stable bit
   reader has also been inlined into `CacheLzwReadCode`, removing one
   `CALL`/`RET` pair per decoded bit without changing the bit-by-bit algorithm.
+  Decoded bits now use the carry from `SRL (LzwCurrentByte)` directly instead
+  of materializing a temporary `0/1` value in `C`.
 - Avoid the post-flip sync blit when both video buffers can be kept coherent by
   a cheaper rectangle copy/fill strategy; this may remove one dirty-rect render
   pass per frame.
