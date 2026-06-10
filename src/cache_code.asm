@@ -1242,29 +1242,18 @@ CacheClearCurrentFrameRectToBackground:
         INC     HL
         LD      D,(HL)
         LD      (CanvasRowsRemaining),DE
-        LD      (BlitRectRows),DE
         LD      A,D
         OR      E
         RET     Z
         CALL    CacheCanvasSeekFrameStart
         CALL    CacheMapCanvasOutputPage
-        LD      HL,GIF_MAX_WIDTH
-        LD      DE,(CanvasFrameWidth)
+.loop:
+        LD      A,(GifBackgroundColor)
+        CALL    CacheCanvasPutPixelOpaque
+        JP      C,LzwCanvasOverflow
+        LD      A,(CanvasOutputDoneFlag)
         OR      A
-        SBC     HL,DE
-        LD      (BlitRowSkip),HL
-.row_loop:
-        CALL    CacheFillCanvasRowWithBackgroundAcc
-        JP      C,LzwCanvasOverflow
-        LD      DE,(BlitRowSkip)
-        CALL    CacheCanvasAdvanceOutputPtrByDE
-        JP      C,LzwCanvasOverflow
-        LD      HL,(BlitRectRows)
-        DEC     HL
-        LD      (BlitRectRows),HL
-        LD      A,H
-        OR      L
-        JR      NZ,.row_loop
+        JR      Z,.loop
         JP      CacheMarkCurrentFrameDirty
 
 CacheFillCanvasRowWithBackgroundAcc:

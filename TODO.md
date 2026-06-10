@@ -11,8 +11,15 @@
   on the target DSS versions; if not, switch to an explicit VSync wait before
   changing `RGMOD`.
 - Verify accelerator-based canvas fills on real Sprinter/DSS builds. Initial
-  canvas background fill and disposal method 2 background rectangles now use
-  Sprinter accelerator block fills instead of CPU `LDIR`/per-pixel loops.
+  canvas background fill still uses Sprinter accelerator block fills, but
+  disposal method 2 background rectangles are back on the conservative
+  per-pixel canvas writer until the accelerator segment path is checked against
+  transparent/disposal-heavy GIFs.
+- Fix the accelerator-based disposal method 2 background fill before enabling
+  it again. The regression is reproducible with `demo/batman-and-robin.gif`
+  copied into the test image as `/DEMO/BATMAN.GIF`: the broken path produced
+  short lower-frame artifacts and long horizontal strips on later frames, while
+  the conservative per-pixel clear renders cleanly.
 - Verify GIF disposal method 3 (`restore to previous`) on real-world samples.
   It now allocates a backup canvas only when such frames are present, saves the
   frame rectangle before decode, and restores it after the frame delay.
@@ -20,7 +27,7 @@
   contains LZW initialization, the main LZW decode loop, dictionary expand/add/pop routines,
   GIF sub-block stream byte reader, per-pixel canvas output and dirty-row video
   blit, frame canvas setup, dirty-rect marking, and disposal method 2
-  accelerator fills. Low-level canvas page mapping used by the cache path now
+  background clears. Low-level canvas page mapping used by the cache path now
   also has cache-local helpers. Next candidate is deeper LZW inner-loop
   optimization.
 - Replace CPU `LDIR`/byte loops in dirty-rect blits and canvas fills with
@@ -56,7 +63,7 @@
   active call sites remain, leaving only shared helpers and error labels needed
   by cache code.
 - Keep refining the GIF sub-block byte path in `CacheFrameStreamGetByte`: data
-  bytes from an active sub-block now read and advance inline instead of calling
+  bytes from an active sub-block read and advance inline instead of calling
   `CacheFrameStreamRawGetByte`; next candidate is reducing the remaining PAGE3
   map check when consecutive LZW byte fetches stay on the same GIF page.
 - Use alternate register sets in hot loops where they can replace stack
@@ -67,9 +74,9 @@
   stream page-cross byte preservation now use alternate `AF` instead of stack
   saves. `CacheFrameStreamRawGetByte` now treats `HL` as scratch, removing
   per-byte `PUSH`/`POP HL` traffic from the raw stream reader.
-  `CacheLzwReadCode` now uses `EXX` around stream-byte fetches instead of
-  saving `HL/BC/DE` on the stack. Stream and canvas `PAGE3` mappers no longer
-  use `B` as a temporary when checking the already-mapped page.
+  `CacheLzwReadCode` uses `EXX` around stream-byte fetches instead of saving
+  `HL/BC/DE` on the stack. Stream and canvas `PAGE3` mappers no longer use `B`
+  as a temporary when checking the already-mapped page.
 - Replace the current bit-by-bit `CacheLzwReadCode` with a verified LSB
   byte-buffer reader once diagnostics are in place. The target is to fetch
   whole bytes from the GIF stream, mask `LzwCodeSize` bits, and shift the
@@ -116,14 +123,14 @@
   carry check and jump straight to the stream page-map body without repeating
   the owner/page check. Pixel output page crossings now jump straight to the
   canvas page-map body without repeating the owner/page check. `CacheLzwReadCode`
-  now keeps `LzwCurrentByte` and `LzwBitsRemaining` in registers while assembling
+  keeps `LzwCurrentByte` and `LzwBitsRemaining` in registers while assembling
   one code, so the common in-byte bit path no longer reloads and stores them for
   every bit. `CacheLzwReadBit` now saves `HL/BC/DE` only when a new byte must be
   fetched from the GIF sub-block stream, leaving the common in-byte bit path free
   of stack traffic. The stable bit reader has also been inlined into
   `CacheLzwReadCode`, removing one
   `CALL`/`RET` pair per decoded bit without changing the bit-by-bit algorithm.
-  Active GIF sub-block data bytes now read and advance inline in
+  Active GIF sub-block data bytes read and advance inline in
   `CacheFrameStreamGetByte`, avoiding the raw-byte helper `CALL`/`RET` on the
   normal LZW byte path.
   Decoded bits now use the carry from `SRL (LzwCurrentByte)` directly instead

@@ -1310,24 +1310,18 @@ PrepareGlobalPalette:
 .loop:
         LD      A,(HL)
         INC     HL
-        CALL    ConvertRgb8ToRgb6
         LD      (DE),A
         INC     DE
         LD      A,(HL)
         INC     HL
-        CALL    ConvertRgb8ToRgb6
         LD      (DE),A
         INC     DE
         LD      A,(HL)
         INC     HL
-        CALL    ConvertRgb8ToRgb6
         LD      (DE),A
         INC     DE
         DJNZ    .loop
         CALL    RestorePage3
-        RET
-
-ConvertRgb8ToRgb6:
         RET
 
 ClearGlobalPaletteBuffer:
